@@ -59,4 +59,6 @@ Every generated workbook contains six dedicated tabs:
 ---
 
 ## License & Attribution
+This project is open-source and licensed under the [MIT License](LICENSE).
+
 Designed for Bolero Standalone environments. Parsed from uncompressed binary structures without third-party vendor proprietary libraries.
