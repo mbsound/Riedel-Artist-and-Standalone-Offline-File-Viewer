@@ -28,6 +28,9 @@ dist/
 *.adm
 *.sqfs
 *.package
+*.Art
+*.art
+backup_bolero_standalone/
 radonApp
 libRadon*
 bolero_server.py
