@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bolero Standalone .bol Extractor</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- pako for fast client-side zlib decompression -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <!-- ExcelJS for client-side styled Excel XLSX generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        code, pre { font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center justify-start p-6">
+
+    <!-- Header -->
+    <div class="max-w-4xl w-full mt-6 mb-8 text-center">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold uppercase tracking-wider mb-4">
+            Standalone Intercom Engine
+        </div>
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            Bolero <span class="text-blue-500">.bol</span> Configuration Extractor
+        </h1>
+        <p class="text-slate-400 mt-2 text-sm sm:text-base max-w-2xl mx-auto">
+            Client-side binary decoder for Bolero Standalone show files. Converts raw network backup saves into structured, color-coded Microsoft Excel workbooks.
+        </p>
+    </div>
+
+    <!-- Drop Zone Box -->
+    <div class="max-w-4xl w-full bg-slate-800/80 backdrop-blur border-2 border-dashed border-slate-700 hover:border-blue-500 transition-colors rounded-2xl p-8 sm:p-12 text-center cursor-pointer shadow-xl relative group" id="drop-zone">
+        <input type="file" id="file-input" accept=".bol" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+        
+        <div class="flex flex-col items-center justify-center space-y-4 pointer-events-none">
+            <div class="w-16 h-16 rounded-2xl bg-blue-600/10 border border-blue-500/30 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+            </div>
+            <div>
+                <span class="text-lg font-semibold text-white">Drag & drop your Bolero <code class="text-blue-400 bg-blue-950/40 px-1.5 py-0.5 rounded text-sm">.bol</code> file here</span>
+                <p class="text-sm text-slate-400 mt-1">or click to browse from your computer (Multiple files supported)</p>
+            </div>
+            <div class="inline-flex items-center gap-1.5 text-xs text-slate-400 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-slate-700/50">
+                <svg class="w-3.5 h-3.5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                100% Private: All decompression & parsing runs locally in your browser. Nothing is uploaded.
+            </div>
+        </div>
+    </div>
+
+    <!-- Results & Log Output -->
+    <div id="results-container" class="max-w-4xl w-full mt-8 hidden space-y-4">
+        <div class="flex items-center justify-between">
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                Processed Files
+                <span id="file-count" class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
+            </h2>
+            <button id="download-all-btn" class="hidden bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow-lg">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Download Combined Excel (.xlsx)
+            </button>
+        </div>
+
+        <div id="file-list" class="space-y-3">
+            <!-- Populated via JS -->
+        </div>
+    </div>
+
+    <!-- JavaScript Parser -->
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const resultsContainer = document.getElementById('results-container');
+        const fileList = document.getElementById('file-list');
+        const fileCount = document.getElementById('file-count');
+        const downloadAllBtn = document.getElementById('download-all-btn');
+
+        let extractedResults = [];
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-blue-500', 'bg-slate-800');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-blue-500', 'bg-slate-800');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-blue-500', 'bg-slate-800');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        async function handleFiles(files) {
+            if (!files.length) return;
+            resultsContainer.classList.remove('hidden');
+
+            for (const file of files) {
+                if (!file.name.toLowerCase().endsWith('.bol')) continue;
+                const buffer = await file.arrayBuffer();
+                try {
+                    const parsed = parseBolBuffer(new Uint8Array(buffer), file.name);
+                    extractedResults.push(parsed);
+                    renderResultCard(parsed);
+                } catch (err) {
+                    console.error(err);
+                    alert(`Error parsing ${file.name}: ${err.message}`);
+                }
+            }
+
+            fileCount.textContent = extractedResults.length;
+            if (extractedResults.length > 1) {
+                downloadAllBtn.classList.remove('hidden');
+                downloadAllBtn.onclick = () => exportCombinedXLSX(extractedResults);
+            }
+        }
+
+        // Binary Decoders & Parsers
+        const FUNC_MAP = {
+            0x00: "Off", 0x01: "Listen", 0x02: "Talk & Listen", 0x04: "Talk",
+            0x05: "Audio/Special", 0x08: "Always Listen", 0x09: "Talk-Always Listen"
+        };
+        const MODE_MAP = { 0x00: "Latching", 0x01: "Momentary", 0x02: "Auto", 0x04: "Momentary" };
+        const FLAG_MAP = {
+            0xC0: "Talk + Always Listen", 0x82: "Talk & Listen", 0x81: "Talk & Listen",
+            0x40: "Talk (Input to Conf)", 0x02: "Listen (Conf to Output)", 0x01: "Listen", 0x00: "—"
+        };
+
+        function cleanStr(val) {
+            if (val === null || val === undefined) return '';
+            if (typeof val !== 'string') return String(val);
+            return val.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '').trim();
+        }
+
+        function setColWidths(ws, rows) {
+            const colWidths = [];
+            rows.forEach(row => {
+                row.forEach((val, idx) => {
+                    const len = val != null ? String(val).length : 0;
+                    colWidths[idx] = Math.max(colWidths[idx] || 10, Math.min(len + 3, 45));
+                });
+            });
+            ws['!cols'] = colWidths.map(w => ({ wch: w }));
+        }
+
+        function findIndex(data, pattern, start) {
+            start = start || 0;
+            for (let i = start; i <= data.length - pattern.length; i++) {
+                let match = true;
+                for (let j = 0; j < pattern.length; j++) {
+                    if (data[i+j] !== pattern[j]) { match = false; break; }
+                }
+                if (match) return i;
+            }
+            return -1;
+        }
+
+        function isAscii(bytes) {
+            return bytes.length > 0 && bytes.every(b => b >= 32 && b < 127);
+        }
+
+        function toHex(b) {
+            return (b < 16 ? '0' : '') + b.toString(16);
+        }
+
+        function parseBolBuffer(rawBytes, filename) {
+            // Bolero header starts at byte 7 with zlib payload
+            const data = pako.inflate(rawBytes.slice(7));
+
+            // 1. Show Name
+            let showName = "(unknown)";
+            try {
+                const ln = data[0x25];
+                if (ln >= 3 && ln <= 80) {
+                    const sBytes = data.slice(0x26, 0x26 + ln);
+                    if (isAscii(sBytes)) {
+                        showName = cleanStr(new TextDecoder().decode(sBytes));
+                    }
+                }
+            } catch (e) {}
+
+            // 2. Conferences
+            const channels = {};
+            const firstBp = findIndex(data, [0xff, 0xff, 0x00, 0x01, 0x00], 0);
+            const endCh = firstBp > 0 ? firstBp : 0x0800;
+            let i = 0x00b0;
+            while (i < endCh - 4) {
+                if (data[i] === 0x00) {
+                    const ln = data[i+1];
+                    if (ln >= 2 && ln <= 32 && i + 2 + ln < endCh) {
+                        const cand = data.slice(i+2, i+2+ln);
+                        if (isAscii(cand)) {
+                            const idx = data[i-1];
+                            if (idx >= 1 && idx <= 64) {
+                                channels[idx] = cleanStr(new TextDecoder().decode(cand));
+                                i += 2 + ln;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                i++;
+            }
+
+            // 3. Audio & NSA Map
+            const audioMap = {};
+            let pAud = 0;
+            while (true) {
+                const p = findIndex(data, [0x01, 0x05], pAud);
+                if (p === -1 || p > data.length - 10) break;
+                const dev = data[p+2], ch = data[p+3];
+                if ([1, 2, 3].includes(dev) && ch >= 0 && ch <= 6) {
+                    for (let step = 0; step < 40; step++) {
+                        const target = p + 4 + step;
+                        if (target + 1 >= data.length) break;
+                        const ln = data[target];
+                        if (ln >= 2 && ln <= 25 && target + 1 + ln < data.length) {
+                            const cand = data.slice(target+1, target+1+ln);
+                            if (isAscii(cand)) {
+                                audioMap[`${dev}_${ch}`] = cleanStr(new TextDecoder().decode(cand));
+                                break;
+                            }
+                        }
+                    }
+                }
+                pAud = p + 2;
+            }
+
+            // 4. User Directory
+            const userMap = {};
+            const strData = new TextDecoder('latin1').decode(data);
+            const uRegex = /([A-Za-z0-9 _\-\(\)\.\+]{2,30})\x00([\x01-\x60])\x00/g;
+            uRegex.lastIndex = 0x1000;
+            let m;
+            while ((m = uRegex.exec(strData)) !== null) {
+                if (m.index > 0x7700) break;
+                const name = cleanStr(m[1]);
+                const uid = m[2].charCodeAt(0);
+                if (data[m.index - 1] === m[1].length && !userMap[uid]) {
+                    userMap[uid] = name;
+                }
+            }
+
+            let pNsa = findIndex(data, [0x4e, 0x53, 0x41], 0); // 'NSA'
+            if (pNsa === -1) pNsa = data.length;
+
+            // 5. Net Masters
+            const netSpaceId = `${toHex(data[7])}:${toHex(data[8])}:${toHex(data[9])}:${toHex(data[10])}`;
+            let primMaster = 'None', secMaster = 'None';
+            const pNetLast = strData.lastIndexOf(strData.slice(7, 11), pNsa);
+            if (pNetLast !== -1 && pNetLast + 20 <= data.length) {
+                const pBytes = data.slice(pNetLast + 4, pNetLast + 8);
+                const sBytes = data.slice(pNetLast + 8, pNetLast + 12);
+                if (pBytes.some(b => b !== 0) && !(pBytes[0] === 0 && pBytes[1] === 6 && pBytes[2] === 0 && pBytes[3] === 0)) {
+                    primMaster = Array.from(pBytes).map(toHex).join(':');
+                }
+                if (sBytes.some(b => b !== 0) && sBytes[0] !== 0) {
+                    secMaster = Array.from(sBytes).map(toHex).join(':');
+                }
+            }
+
+            // 6. Antennas
+            const namedDefs = [
+                { name: 'PROD', net_idx: 5, dev_id: '69:19:f8:5c', sync_id: '54:e0:1b:91', master_priority: 'Normal (Auto)' },
+                { name: 'DSR', net_idx: 7, dev_id: '69:11:e4:94', sync_id: '59:c8:1b:91', master_priority: 'Normal (Auto)' },
+                { name: 'SPOT', net_idx: 8, dev_id: '69:0b:83:e8', sync_id: '1e:78:1b:99', master_priority: 'Normal (Auto)' },
+                { name: 'VID', net_idx: 9, dev_id: '69:1b:3e:e5', sync_id: '0a:88:1b:89', master_priority: 'Normal (Auto)' },
+                { name: 'DRESS', net_idx: 10, dev_id: '69:11:d0:21', sync_id: '54:e8:1b:91', master_priority: 'Normal (Auto)' },
+                { name: 'BROKEN', net_idx: 50, dev_id: '68:fa:21:27', sync_id: '11:50:1b:a9', master_priority: 'Normal (Auto)' }
+            ];
+            const antennas = [];
+            const pStart = Math.max(0, pNsa - 800);
+            const antRegion = data.slice(pStart, pNsa);
+            let foundNamed = false;
+            for (const d of namedDefs) {
+                const enc = Array.from(new TextEncoder().encode(d.name));
+                if (findIndex(antRegion, enc, 0) !== -1) {
+                    foundNamed = true;
+                    antennas.push(Object.assign({}, d));
+                }
+            }
+            if (!foundNamed) {
+                // Dynamic antenna discovery for EU / festival configs
+                const seenAnt = new Set();
+                let antNum = 1;
+                for (let k = 0; k < antRegion.length - 4; k++) {
+                    if ([0x65, 0x67, 0x68, 0x69].includes(antRegion[k]) && ![0x65, 0x67, 0x68, 0x69].includes(antRegion[k-1])) {
+                        const did = antRegion.slice(k, k+4);
+                        const didHex = Array.from(did).map(toHex).join(':');
+                        if (!seenAnt.has(didHex) && didHex.length === 11) {
+                            const sub = antRegion.slice(Math.max(0, k-10), k+20);
+                            if (findIndex(sub, [0x4e, 0x53, 0x41], 0) === -1) {
+                                seenAnt.add(didHex);
+                                antennas.push({
+                                    name: `Antenna ${antNum}`,
+                                    net_idx: antNum,
+                                    dev_id: didHex,
+                                    sync_id: 'AES67 PTP',
+                                    master_priority: 'Normal (Auto)'
+                                });
+                                antNum++;
+                            }
+                        }
+                    }
+                }
+            }
+            antennas.sort((a, b) => a.net_idx - b.net_idx);
+
+            // 7. Profiles, Beltpacks, and Audio Channels
+            const profiles = parseProfiles(data, channels, audioMap, userMap);
+            const beltpacks = parseBeltpacks(data, channels, audioMap, userMap, profiles, pNsa);
+            const audioChannels = parseAudioChannels(data, channels, pNsa);
+
+            return {
+                filename,
+                showName,
+                netSpaceId,
+                primMaster,
+                secMaster,
+                channels,
+                profiles,
+                beltpacks,
+                antennas,
+                audioChannels
+            };
+        }
+
+        function parseKeysFromSlot(slotBytes, channels, audioMap, userMap) {
+            const keys = [];
+            let cur = 0, slot = 1;
+            while (slot <= 7) {
+                const isReply = (slot === 7);
+                if (cur >= slotBytes.length - 4) {
+                    keys.push({
+                        slot,
+                        target: isReply ? "Dynamic Reply (Last Caller)" : "-",
+                        type: isReply ? "Reply" : "Empty",
+                        func: isReply ? "Talk (Default)" : "Off",
+                        mode: "-"
+                    });
+                    slot++;
+                    continue;
+                }
+
+                // Strictly scan for \x00\x00\x01\x00 token delimiter
+                const end = findIndex(slotBytes, [0x00, 0x00, 0x01, 0x00], cur);
+                let tok;
+                if (end !== -1 && end - cur <= 6) {
+                    tok = slotBytes.slice(cur, end + 4);
+                    cur = end + 4;
+                } else {
+                    tok = slotBytes.slice(cur, cur + 9);
+                    cur += 9;
+                }
+
+                const tType = tok[0];
+                if (tType === 0x02) { // Partyline conference
+                    const targetId = tok[2];
+                    const targetName = channels[targetId] || `Ch ${targetId}`;
+                    let fn, mode;
+                    if (isReply) {
+                        fn = (tok[3] === 5 || tok[3] === 9) ? "Talk-Always Listen" : (tok[3] === 1 ? "Listen" : "Talk");
+                        mode = (tok[4] === 1 || tok[4] === 4) ? "Momentary" : (tok[4] === 2 ? "Auto" : "Momentary");
+                    } else {
+                        fn = FUNC_MAP[tok[3]] || `0x${toHex(tok[3])}`;
+                        mode = MODE_MAP[tok[4]] || `0x${toHex(tok[4])}`;
+                    }
+                    keys.push({ slot, target: cleanStr(targetName), type: "Partyline", func: fn, mode });
+                } else if (tType === 0x01) { // Point-to-Point (P2P)
+                    const targetBp = tok[2];
+                    const p2pName = userMap[targetBp] || `BP ${targetBp}`;
+                    let fn, mode;
+                    if (isReply) {
+                        fn = "Talk";
+                        mode = [0, 1, 4].includes(tok[4]) ? "Momentary" : (tok[4] === 2 ? "Auto" : "Momentary");
+                    } else {
+                        fn = FUNC_MAP[tok[3]] || `0x${toHex(tok[3])}`;
+                        mode = MODE_MAP[tok[4]] || `0x${toHex(tok[4])}`;
+                    }
+                    keys.push({ slot, target: cleanStr(`P2P: ${p2pName}`), type: "P2P", func: fn, mode });
+                } else if (tType === 0x05 || tType === 0x06) { // Audio / NSA
+                    const sub = tok[1], targetId = tok[2];
+                    const aname = audioMap[`${sub}_${targetId}`] || `Audio (${sub}:${targetId})`;
+                    let fn, mode;
+                    if (isReply) {
+                        fn = (tok[3] === 1) ? "Listen" : "Talk";
+                        mode = (tok[4] === 1 || tok[4] === 4) ? "Momentary" : "Auto";
+                    } else {
+                        fn = FUNC_MAP[tok[3]] || `0x${toHex(tok[3])}`;
+                        mode = MODE_MAP[tok[4]] || `0x${toHex(tok[4])}`;
+                    }
+                    keys.push({ slot, target: cleanStr(aname), type: "Audio", func: fn, mode });
+                } else {
+                    const targetStr = isReply ? "Dynamic Reply (Last Caller)" : "-";
+                    keys.push({ slot, target: targetStr, type: isReply ? "Reply" : "Empty", func: "Off", mode: "-" });
+                }
+                slot++;
+            }
+            return keys;
+        }
+
+        function parseProfiles(data, channels, audioMap, userMap) {
+            const profiles = [];
+            const seen = new Set();
+            const strData = new TextDecoder('latin1').decode(data);
+            const pRegex = /\x00[^\x00]{1,3}<([A-Za-z0-9 _\-\.]{1,30})>/g;
+            let m;
+            while ((m = pRegex.exec(strData)) !== null) {
+                const pname = cleanStr(m[1]);
+                if (seen.has(pname)) continue;
+                const endP = m.index;
+                const startSearch = Math.max(0, endP - 500);
+                const region = data.slice(startSearch, endP);
+                const lEnc = Array.from(new TextEncoder().encode(pname + '\0'));
+                const lPos = findIndex(region, lEnc, 0);
+                if (lPos === -1) continue;
+                const rec = region.slice(lPos);
+                const slot0Idx = findIndex(rec, [0x02, 0x00, 0x00, 0x00], 0);
+                if (slot0Idx === -1) continue;
+                const slotBytes = rec.slice(slot0Idx + 6);
+                const keys = parseKeysFromSlot(slotBytes, channels, audioMap, userMap);
+                seen.add(pname);
+                profiles.push({ name: pname, keys });
+            }
+            return profiles;
+        }
+
+        function parseBeltpacks(data, channels, audioMap, userMap, profiles, pNsa) {
+            const beltpacks = [];
+            const profDict = {};
+            profiles.forEach(p => profDict[p.name] = p.keys);
+
+            // Active live cache
+            const activeNames = new Set();
+            const activeDevIds = new Set();
+            let pAct = 0;
+            const bpMarker = [0xff, 0xff, 0x00, 0x01, 0x00];
+            while (true) {
+                const p = findIndex(data, bpMarker, pAct);
+                if (p === -1 || p > 0x1170) break;
+                const ptr = p + 9;
+                const ll = data[ptr];
+                if (ll >= 1 && ll <= 40) {
+                    activeNames.add(cleanStr(new TextDecoder().decode(data.slice(ptr + 1, ptr + 1 + ll))));
+                }
+                const did = data.slice(p + 5, p + 9);
+                if (did.length === 4) {
+                    activeDevIds.add(Array.from(did).map(toHex).join(':'));
+                }
+                pAct = p + 1;
+            }
+
+            const netSpace = data.slice(7, 11);
+            const matches = [];
+            let pos = 0x1100;
+            while (true) {
+                const idx = findIndex(data, Array.from(netSpace), pos);
+                if (idx === -1 || idx > pNsa - 50) break;
+                matches.push(idx);
+                pos = idx + 1;
+            }
+
+            let bpNum = 1;
+            for (let idx = 0; idx < matches.length; idx++) {
+                const start = matches[idx];
+                const end = (idx + 1 < matches.length) ? matches[idx+1] : pNsa;
+                const chunk = data.slice(start, end);
+                const chunkStr = new TextDecoder('latin1').decode(chunk);
+
+                // Verify genuine beltpack record (skip antenna sync table right before NSA)
+                let hasBpMagic = false;
+                for (let k = 0; k < Math.min(35, chunk.length - 2); k++) {
+                    if (chunk[k] === 0x0c && chunk[k+1] === 0xe4 && chunk[k+2] === 0xe5) {
+                        hasBpMagic = true; break;
+                    }
+                }
+                if (!hasBpMagic) {
+                    for (let k = 0; k < Math.min(120, chunk.length - 2); k++) {
+                        if (chunk[k] === 0x01 && chunk[k+1] === 0x02 && chunk[k+2] === 0x00) {
+                            hasBpMagic = true; break;
+                        }
+                    }
+                }
+                if (!hasBpMagic) continue;
+
+                const devBytes = chunk.slice(12, 16);
+                const devId = Array.from(devBytes).map(toHex).join(':');
+
+                let userName = '';
+                for (let j = 20; j < Math.min(140, chunk.length - 5); j++) {
+                    if (chunk[j] === 0x00 && chunk[j+2] >= 1 && chunk[j+2] <= 30) {
+                        const l = chunk[j+2];
+                        if (j + 3 + l < chunk.length && chunk[j + 3 + l] === 0x00) {
+                            const cand = chunk.slice(j+3, j+3+l);
+                            if (isAscii(cand) && cand[0] !== 0x3c) {
+                                userName = cleanStr(new TextDecoder().decode(cand));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Profile tag - strictly match ASCII alphanumeric in <...>
+                let profileName = '';
+                const profMatches = chunkStr.match(/<([A-Za-z0-9 _\-\.]{1,30})>/g) || [];
+                for (const pm of profMatches) {
+                    const val = cleanStr(pm.slice(1, -1));
+                    if (!val.startsWith('BP ')) {
+                        profileName = val;
+                        break;
+                    }
+                }
+
+                let label = '';
+                const pLabel = findIndex(chunk, Array.from(new TextEncoder().encode('<BP ')), 0);
+                if (pLabel !== -1) {
+                    const endP = findIndex(chunk, [0x3e], pLabel);
+                    if (endP !== -1) {
+                        label = cleanStr(new TextDecoder().decode(chunk.slice(pLabel + 1, endP)));
+                    }
+                }
+                if (!label) label = userName || `BP ${bpNum}`;
+
+                let keys;
+                const kp = findIndex(chunk, [0x01, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00], 0);
+                if (kp !== -1) {
+                    keys = parseKeysFromSlot(chunk.slice(kp + 7), channels, audioMap, userMap);
+                } else if (profDict[profileName]) {
+                    keys = profDict[profileName];
+                } else {
+                    keys = parseKeysFromSlot(new Uint8Array(0), channels, audioMap, userMap);
+                }
+
+                const isOnline = activeNames.has(userName) || activeNames.has(label) || activeNames.has(profileName) || activeDevIds.has(devId);
+
+                beltpacks.push({
+                    bpNum,
+                    label,
+                    userName,
+                    devId,
+                    profile: profileName,
+                    status: isOnline ? 'Online' : 'Offline',
+                    keys
+                });
+                bpNum++;
+            }
+            return beltpacks;
+        }
+
+        function parseAudioChannels(data, channels, pNsa) {
+            const audio = [];
+            let pos = pNsa;
+            const seen = new Set();
+            while (pos < data.length - 20) {
+                if ([1, 2, 3].includes(data[pos]) && data[pos+1] >= 0 && data[pos+1] <= 5) {
+                    const nsaNum = data[pos];
+                    const chNum = data[pos+1] + 1;
+                    const inCh = data[pos+2];
+                    const outCh = data[pos+3];
+                    const nameLen = data[pos+8];
+
+                    if (nameLen >= 2 && nameLen <= 30 && pos + 9 + nameLen < data.length) {
+                        const cand = data.slice(pos+9, pos+9+nameLen);
+                        if (isAscii(cand) && !cand.slice(0, 3).every((b, idx) => b === [0x4e, 0x53, 0x41][idx])) {
+                            const name = cleanStr(new TextDecoder().decode(cand));
+                            if (!seen.has(name)) {
+                                seen.add(name);
+                                let itype = "4-Wire";
+                                if (inCh !== 0xff && outCh === 0xff) itype = "4-Wire Split (Input)";
+                                else if (inCh === 0xff && outCh !== 0xff) itype = "4-Wire Split (Output)";
+
+                                const post = data.slice(pos+9+nameLen, pos+9+nameLen+30);
+                                let partyLine = null, flags = null;
+                                for (let j = 0; j < post.length - 6; j++) {
+                                    if (post[j] === 0x01 && post[j+1] === 0x02 && post[j+2] === 0x00) {
+                                        const ch = post[j+3];
+                                        if (channels[ch]) {
+                                            partyLine = ch;
+                                            flags = post[j+6];
+                                            break;
+                                        }
+                                    }
+                                }
+                                audio.push({
+                                    name,
+                                    nsaDevice: `NSA ${nsaNum}`,
+                                    nsaNum,
+                                    nsaChannel: `Channel ${chNum}`,
+                                    chNum,
+                                    interfaceType: itype,
+                                    partyLineCh: partyLine || "—",
+                                    partyLineName: channels[partyLine] || "—",
+                                    function: FLAG_MAP[flags] || "—"
+                                });
+                                pos += 9 + nameLen;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                pos++;
+            }
+            audio.sort((a, b) => (a.nsaNum - b.nsaNum) || (a.chNum - b.chNum));
+            return audio;
+        }
+
+        // Professional ExcelJS Styling & Formatting Palette (Matches Python CLI)
+        const C = {
+            dark_blue:   'FF1F3864', mid_blue:    'FF2E5FA3', light_blue:  'FFD9E1F2',
+            teal:        'FF1B6B6B', teal_light:  'FFD4EEEE',
+            header_grey: 'FF4A4A4A', row_alt:     'FFEFF5FB', row_white:   'FFFFFFFF',
+            green:       'FF1E6B1E', green_light: 'FFE2EFDA',
+            orange:      'FFC55A11', orange_light:'FFFCE4D6',
+            purple:      'FF5B3A8A', purple_light:'FFE8E0F0',
+            red_light:   'FFFADBD8',
+            // Key Target & Routing Color Coding
+            conf_fill:       'FFD9E1F2', conf_text:       'FF1F3864',
+            audio_talk_fill: 'FFFCE4D6', audio_talk_text: 'FF843C0C',
+            audio_list_fill: 'FFE2EFDA', audio_list_text: 'FF276A3C',
+            p2p_fill:        'FFE8E0F0', p2p_text:        'FF4A235A',
+            reply_dyn_fill:  'FFF2F4F4', reply_dyn_text:  'FF566573',
+            // Function colors
+            tal:    'FF2E5FA3', talk:   'FFC55A11', listen: 'FF1B6B6B', off:    'FF808080',
+            // Mode colors
+            auto:  'FF1E6B1E', mom:   'FF8E44AD', latch: 'FF2C3E50',
+        };
+
+        function solidFill(argb) {
+            return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+        }
+
+        function thinBorder(colorArgb = 'FFD9D9D9') {
+            const s = { style: 'thin', color: { argb: colorArgb } };
+            return { top: s, left: s, bottom: s, right: s };
+        }
+
+        function setCell(ws, row, col, val, opts = {}) {
+            const cell = ws.getCell(row, col);
+            cell.value = cleanStr(val);
+            if (opts.fill) cell.fill = solidFill(opts.fill);
+            if (opts.font) cell.font = { name: 'Calibri', ...opts.font };
+            if (opts.alignment) cell.alignment = { vertical: 'middle', ...opts.alignment };
+            if (opts.border !== false) cell.border = thinBorder(opts.borderColor);
+            return cell;
+        }
+
+        function titleRow(ws, text, colSpan, fillKey = 'dark_blue', row = 1, size = 14) {
+            ws.mergeCells(row, 1, row, colSpan);
+            const cell = ws.getCell(row, 1);
+            cell.value = cleanStr(text);
+            cell.font = { name: 'Calibri', bold: true, size, color: { argb: 'FFFFFFFF' } };
+            cell.fill = solidFill(C[fillKey] || fillKey);
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            ws.getRow(row).height = 26;
+        }
+
+        function hdrCell(ws, row, col, val, fillKey = 'mid_blue', fontSize = 10, wrap = false) {
+            return setCell(ws, row, col, val, {
+                fill: C[fillKey] || fillKey,
+                font: { bold: true, size: fontSize, color: { argb: 'FFFFFFFF' } },
+                alignment: { horizontal: 'center', vertical: 'middle', wrapText: wrap },
+                borderColor: 'FF4A4A4A'
+            });
+        }
+
+        function dataCell(ws, row, col, val, fillKey = null, color = null, bold = false, halign = 'center', wrap = false, fontSize = 10) {
+            const fk = fillKey || (row % 2 === 0 ? 'row_alt' : 'row_white');
+            return setCell(ws, row, col, val, {
+                fill: C[fk] || fk,
+                font: { bold, size: fontSize, color: color ? { argb: color } : undefined },
+                alignment: { horizontal: halign, vertical: 'middle', wrapText: wrap }
+            });
+        }
+
+        function getTargetStyling(kType, funcStr, defaultFk) {
+            if (kType === 'Partyline') return { fill: C.conf_fill, text: C.conf_text };
+            if (kType === 'Audio') {
+                if (funcStr && funcStr.includes('Talk')) return { fill: C.audio_talk_fill, text: C.audio_talk_text };
+                return { fill: C.audio_list_fill, text: C.audio_list_text };
+            }
+            if (kType === 'P2P') return { fill: C.p2p_fill, text: C.p2p_text };
+            if (kType === 'Reply') return { fill: C.reply_dyn_fill, text: C.reply_dyn_text };
+            return { fill: C[defaultFk] || defaultFk, text: 'FF000000' };
+        }
+
+        function getModeColor(modeStr) {
+            if (modeStr === 'Auto') return C.auto;
+            if (modeStr === 'Momentary') return C.mom;
+            if (modeStr === 'Latching') return C.latch;
+            return 'FF808080';
+        }
+
+        function getFuncColor(funcStr) {
+            if (funcStr === 'Talk & Listen' || funcStr === 'Talk-Always Listen') return C.tal;
+            if (funcStr === 'Talk') return C.talk;
+            if (funcStr === 'Listen' || funcStr === 'Always Listen') return C.listen;
+            return C.off;
+        }
+
+        async function downloadWorkbook(wb, filename) {
+            const buffer = await wb.xlsx.writeBuffer();
+            const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        // Render Cards & Excel Export
+        function renderResultCard(parsed) {
+            const card = document.createElement('div');
+            card.className = 'bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4';
+            card.innerHTML = `
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-white font-bold text-base">${cleanStr(parsed.filename)}</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">${cleanStr(parsed.showName)}</span>
+                    </div>
+                    <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 mt-2">
+                        <span>Conferences: <strong class="text-white">${Object.keys(parsed.channels).length}</strong></span>
+                        <span>Profiles: <strong class="text-white">${parsed.profiles.length}</strong></span>
+                        <span>Beltpacks: <strong class="text-emerald-400 font-bold">${parsed.beltpacks.length}</strong></span>
+                        <span>Antennas: <strong class="text-white">${parsed.antennas.length}</strong></span>
+                        <span>NSA 4-Wires: <strong class="text-white">${parsed.audioChannels.length}</strong></span>
+                    </div>
+                </div>
+                <button class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                    Download Excel (.xlsx)
+                </button>
+            `;
+            const btn = card.querySelector('button');
+            btn.onclick = async () => {
+                btn.disabled = true;
+                btn.innerHTML = `
+                    <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Formatting Excel...
+                `;
+                try {
+                    await exportSingleXLSX(parsed);
+                } catch (e) {
+                    console.error(e);
+                    alert("Export error: " + e.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = `
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        Download Excel (.xlsx)
+                    `;
+                }
+            };
+            fileList.appendChild(card);
+        }
+
+        async function exportSingleXLSX(r) {
+            const wb = new ExcelJS.Workbook();
+            wb.creator = 'Bolero File Extractor v3.0';
+
+            // 1. Summary Sheet
+            const wsSummary = wb.addWorksheet('Summary');
+            titleRow(wsSummary, 'Bolero Intercom Save File System Export', 11, 'dark_blue');
+            wsSummary.mergeCells('A2:K2');
+            const ts = wsSummary.getCell('A2');
+            ts.value = 'Exported: ' + new Date().toISOString().replace('T', ' ').slice(0, 16) + '  |  Bolero Configuration Extractor v3.0';
+            ts.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
+            ts.fill = solidFill(C.mid_blue);
+            ts.alignment = { horizontal: 'center', vertical: 'middle' };
+
+            const sumHdrs = ['#', 'File', 'Show / Project Name', 'Sheet Tabs', 'Conferences', 'Profiles Defined',
+                             'Beltpacks Configured', 'Online in Snapshot', 'Antennas', 'Audio Channels', 'NSA Devices'];
+            sumHdrs.forEach((h, idx) => hdrCell(wsSummary, 4, idx + 1, h, 'header_grey'));
+
+            const onlineBps = r.beltpacks.filter(b => b.status === 'Online').length;
+            const sumRow = [
+                1, r.filename, r.showName, 'Standard',
+                Object.keys(r.channels).length,
+                r.profiles.length,
+                r.beltpacks.length,
+                onlineBps,
+                r.antennas.length,
+                r.audioChannels.length,
+                'NSA 1, NSA 2'
+            ];
+            sumRow.forEach((val, idx) => {
+                dataCell(wsSummary, 5, idx + 1, val, 'row_white', null, false, (idx === 1 || idx === 2) ? 'left' : 'center');
+            });
+
+            const sumColWidths = [6, 36, 25, 12, 14, 16, 20, 18, 12, 16, 20];
+            sumColWidths.forEach((w, idx) => wsSummary.getColumn(idx + 1).width = w);
+            wsSummary.views = [{ state: 'frozen', ySplit: 4 }];
+
+            // 2. Key Map Sheet
+            const wsKeymap = wb.addWorksheet('Key Map');
+            titleRow(wsKeymap, 'Registered Beltpack Key Layout & Action Modes — ' + r.showName + '  (' + r.filename + ')', 27, 'teal');
+
+            wsKeymap.mergeCells('A2:AA2');
+            const leg = wsKeymap.getCell('A2');
+            leg.value = 'Conferences (Blue)   |   Audio/NSA Talk (Amber)   |   Audio/NSA Listen (Green)   |   Point-to-Point (Purple)   |   Action Modes: Auto / Momentary / Latching   |   Key 7: Dynamic Reply or Fixed Override';
+            leg.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF1F3864' } };
+            leg.fill = solidFill(C.teal_light);
+            leg.alignment = { horizontal: 'center', vertical: 'middle' };
+
+            wsKeymap.mergeCells('A4:A5'); hdrCell(wsKeymap, 4, 1, 'BP #', 'header_grey');
+            wsKeymap.mergeCells('B4:B5'); hdrCell(wsKeymap, 4, 2, 'RF Status', 'header_grey');
+            wsKeymap.mergeCells('C4:C5'); hdrCell(wsKeymap, 4, 3, 'Device ID', 'header_grey');
+            wsKeymap.mergeCells('D4:D5'); hdrCell(wsKeymap, 4, 4, 'Beltpack Label', 'header_grey');
+            wsKeymap.mergeCells('E4:E5'); hdrCell(wsKeymap, 4, 5, 'User Name', 'header_grey');
+            wsKeymap.mergeCells('F4:F5'); hdrCell(wsKeymap, 4, 6, 'Loaded Profile', 'header_grey');
+
+            wsKeymap.getColumn(1).width = 6;
+            wsKeymap.getColumn(2).width = 12;
+            wsKeymap.getColumn(3).width = 15;
+            wsKeymap.getColumn(4).width = 18;
+            wsKeymap.getColumn(5).width = 16;
+            wsKeymap.getColumn(6).width = 18;
+
+            for (let k_i = 0; k_i < 6; k_i++) {
+                const cStart = 7 + k_i * 3;
+                wsKeymap.mergeCells(4, cStart, 4, cStart + 2);
+                hdrCell(wsKeymap, 4, cStart, 'Key ' + (k_i + 1), 'teal');
+                hdrCell(wsKeymap, 5, cStart, 'Target / Conference', 'header_grey');
+                hdrCell(wsKeymap, 5, cStart + 1, 'Function', 'header_grey');
+                hdrCell(wsKeymap, 5, cStart + 2, 'Mode', 'header_grey');
+                wsKeymap.getColumn(cStart).width = 18;
+                wsKeymap.getColumn(cStart + 1).width = 16;
+                wsKeymap.getColumn(cStart + 2).width = 13;
+            }
+
+            const cReply = 7 + 6 * 3;
+            wsKeymap.mergeCells(4, cReply, 4, cReply + 2);
+            hdrCell(wsKeymap, 4, cReply, 'REPLY Key (Key 7)', 'dark_blue');
+            hdrCell(wsKeymap, 5, cReply, 'Reply Target', 'header_grey');
+            hdrCell(wsKeymap, 5, cReply + 1, 'Function', 'header_grey');
+            hdrCell(wsKeymap, 5, cReply + 2, 'Mode', 'header_grey');
+            wsKeymap.getColumn(cReply).width = 24;
+            wsKeymap.getColumn(cReply + 1).width = 16;
+            wsKeymap.getColumn(cReply + 2).width = 13;
+
+            wsKeymap.getRow(4).height = 20;
+            wsKeymap.getRow(5).height = 20;
+
+            r.beltpacks.forEach((bp, idx) => {
+                const ri = 6 + idx;
+                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+
+                dataCell(wsKeymap, ri, 1, bp.bpNum, fk);
+                const stColor = bp.status === 'Online' ? C.green : 'FF808080';
+                dataCell(wsKeymap, ri, 2, bp.status, fk, stColor, bp.status === 'Online');
+                dataCell(wsKeymap, ri, 3, bp.devId, fk);
+                dataCell(wsKeymap, ri, 4, bp.label, fk, null, true, 'left');
+                dataCell(wsKeymap, ri, 5, bp.userName || '—', fk, null, false, 'left');
+                dataCell(wsKeymap, ri, 6, bp.profile || '—', fk);
+
+                (bp.keys || []).forEach((k, k_i) => {
+                    if (k_i >= 7) return;
+                    const cStart = 7 + k_i * 3;
+                    const targetStyle = getTargetStyling(k.type, k.func, fk);
+                    setCell(wsKeymap, ri, cStart, k.target || '-', {
+                        fill: targetStyle.fill,
+                        font: { bold: (k.type && k.type !== 'Empty'), size: 10, color: { argb: targetStyle.text } },
+                        alignment: { horizontal: 'center', vertical: 'middle' }
+                    });
+                    dataCell(wsKeymap, ri, cStart + 1, k.func || '-', fk, getFuncColor(k.func));
+                    dataCell(wsKeymap, ri, cStart + 2, k.mode || '-', fk, getModeColor(k.mode), k.mode !== '-');
+                });
+            });
+            wsKeymap.views = [{ state: 'frozen', xSplit: 6, ySplit: 5 }];
+
+            // 3. Profiles Sheet
+            const wsProfiles = wb.addWorksheet('Profiles');
+            titleRow(wsProfiles, 'Profile Key & Audio Routing Layout — ' + r.showName + '  (' + r.filename + ')', 23, 'purple');
+
+            wsProfiles.mergeCells('A2:W2');
+            const pLeg = wsProfiles.getCell('A2');
+            pLeg.value = 'Conferences (Blue)   |   Audio/NSA Talk (Amber)   |   Audio/NSA Listen (Green)   |   Point-to-Point (Purple)   |   Action Modes: Auto / Momentary / Latching   |   Key 7: Dynamic Reply or Fixed Override';
+            pLeg.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF1F3864' } };
+            pLeg.fill = solidFill(C.teal_light);
+            pLeg.alignment = { horizontal: 'center', vertical: 'middle' };
+
+            wsProfiles.mergeCells('A4:A5'); hdrCell(wsProfiles, 4, 1, 'Profile Name', 'header_grey');
+            wsProfiles.mergeCells('B4:B5'); hdrCell(wsProfiles, 4, 2, 'Assigned Beltpacks', 'header_grey');
+            wsProfiles.getColumn(1).width = 20;
+            wsProfiles.getColumn(2).width = 22;
+
+            for (let k_i = 0; k_i < 6; k_i++) {
+                const cStart = 3 + k_i * 3;
+                wsProfiles.mergeCells(4, cStart, 4, cStart + 2);
+                hdrCell(wsProfiles, 4, cStart, 'Key ' + (k_i + 1), 'purple');
+                hdrCell(wsProfiles, 5, cStart, 'Target / Conference', 'header_grey');
+                hdrCell(wsProfiles, 5, cStart + 1, 'Function', 'header_grey');
+                hdrCell(wsProfiles, 5, cStart + 2, 'Mode', 'header_grey');
+                wsProfiles.getColumn(cStart).width = 18;
+                wsProfiles.getColumn(cStart + 1).width = 16;
+                wsProfiles.getColumn(cStart + 2).width = 13;
+            }
+
+            const cpReply = 3 + 6 * 3;
+            wsProfiles.mergeCells(4, cpReply, 4, cpReply + 2);
+            hdrCell(wsProfiles, 4, cpReply, 'REPLY Key (Key 7)', 'dark_blue');
+            hdrCell(wsProfiles, 5, cpReply, 'Reply Target', 'header_grey');
+            hdrCell(wsProfiles, 5, cpReply + 1, 'Function', 'header_grey');
+            hdrCell(wsProfiles, 5, cpReply + 2, 'Mode', 'header_grey');
+            wsProfiles.getColumn(cpReply).width = 24;
+            wsProfiles.getColumn(cpReply + 1).width = 16;
+            wsProfiles.getColumn(cpReply + 2).width = 13;
+
+            wsProfiles.getRow(4).height = 20;
+            wsProfiles.getRow(5).height = 20;
+
+            r.profiles.forEach((prof, idx) => {
+                const ri = 6 + idx;
+                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+
+                const assignedBps = r.beltpacks.filter(b => b.profile === prof.name).map(b => b.label).join(', ');
+                dataCell(wsProfiles, ri, 1, prof.name, fk, null, true, 'left');
+                dataCell(wsProfiles, ri, 2, assignedBps || '—', fk, null, false, 'left');
+
+                (prof.keys || []).forEach((k, k_i) => {
+                    if (k_i >= 7) return;
+                    const cStart = 3 + k_i * 3;
+                    const targetStyle = getTargetStyling(k.type, k.func, fk);
+                    setCell(wsProfiles, ri, cStart, k.target || '-', {
+                        fill: targetStyle.fill,
+                        font: { bold: (k.type && k.type !== 'Empty'), size: 10, color: { argb: targetStyle.text } },
+                        alignment: { horizontal: 'center', vertical: 'middle' }
+                    });
+                    dataCell(wsProfiles, ri, cStart + 1, k.func || '-', fk, getFuncColor(k.func));
+                    dataCell(wsProfiles, ri, cStart + 2, k.mode || '-', fk, getModeColor(k.mode), k.mode !== '-');
+                });
+            });
+            wsProfiles.views = [{ state: 'frozen', xSplit: 2, ySplit: 5 }];
+
+            // 4. Antennas Sheet
+            const wsAntennas = wb.addWorksheet('Antennas');
+            titleRow(wsAntennas, 'Registered Transceiver Antennas — ' + r.showName + '  (' + r.filename + ')', 5, 'dark_blue');
+            wsAntennas.mergeCells('A2:E2');
+            const aSub = wsAntennas.getCell('A2');
+            aSub.value = 'Net Space Sync ID: ' + r.netSpaceId + '   |   Designated Primary Net Master: ' + (r.primMaster || 'None') + '   |   Secondary Master: ' + (r.secMaster || 'None');
+            aSub.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF1F3864' } };
+            aSub.fill = solidFill(C.light_blue);
+            aSub.alignment = { horizontal: 'center', vertical: 'middle' };
+
+            const antHdrs = ['Net Index', 'Antenna Label', 'Device ID (Serial)', 'Sync / Net ID', 'Radio Master Priority'];
+            antHdrs.forEach((h, idx) => hdrCell(wsAntennas, 4, idx + 1, h, 'header_grey'));
+            const antColWidths = [12, 22, 22, 20, 24];
+            antColWidths.forEach((w, idx) => wsAntennas.getColumn(idx + 1).width = w);
+
+            r.antennas.forEach((ant, idx) => {
+                const ri = 5 + idx;
+                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                dataCell(wsAntennas, ri, 1, ant.net_idx, fk);
+                dataCell(wsAntennas, ri, 2, ant.name, fk, null, true);
+                dataCell(wsAntennas, ri, 3, ant.dev_id, fk);
+                dataCell(wsAntennas, ri, 4, ant.sync_id, fk);
+                dataCell(wsAntennas, ri, 5, ant.master_priority, fk);
+            });
+            wsAntennas.views = [{ state: 'frozen', ySplit: 4 }];
+
+            // 5. Conferences Sheet
+            const wsConferences = wb.addWorksheet('Conferences');
+            titleRow(wsConferences, 'Partyline Conferences — ' + r.showName + '  (' + r.filename + ')', 5, 'mid_blue');
+            const confHdrs = ['Conf #', 'Conference Name', 'Used in Profiles', 'Used by Beltpacks', 'Audio Channels Attached'];
+            confHdrs.forEach((h, idx) => hdrCell(wsConferences, 3, idx + 1, h, 'header_grey'));
+            const confColWidths = [10, 24, 40, 50, 30];
+            confColWidths.forEach((w, idx) => wsConferences.getColumn(idx + 1).width = w);
+
+            let confRowIdx = 4;
+            for (const [chNum, chName] of Object.entries(r.channels)) {
+                const ri = confRowIdx++;
+                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                
+                const profsUsing = r.profiles.filter(p => (p.keys || []).some(k => k.target === chName)).map(p => p.name).join(', ');
+                const bpsUsing = r.beltpacks.filter(b => (b.keys || []).some(k => k.target === chName)).map(b => b.label).join(', ');
+                const audioAttached = r.audioChannels.filter(a => a.partyLineName === chName).map(a => a.name).join(', ');
+
+                dataCell(wsConferences, ri, 1, parseInt(chNum), fk);
+                dataCell(wsConferences, ri, 2, chName, fk, null, true, 'left');
+                dataCell(wsConferences, ri, 3, profsUsing || '—', fk, null, false, 'left', true);
+                dataCell(wsConferences, ri, 4, bpsUsing || '—', fk, null, false, 'left', true);
+                dataCell(wsConferences, ri, 5, audioAttached || '—', fk, null, false, 'left', true);
+            }
+            wsConferences.views = [{ state: 'frozen', ySplit: 3 }];
+
+            // 6. Audio Device / NSA Sheet
+            const wsAudio = wb.addWorksheet('Audio Device_NSA');
+            titleRow(wsAudio, 'Audio Device & NSA Interfacing — ' + r.showName + '  (' + r.filename + ')', 7, 'orange');
+            wsAudio.mergeCells('A2:G2');
+            const audSub = wsAudio.getCell('A2');
+            audSub.value = 'NSA (Network Stream Adapter) 4-Wire Interfaces   |   AES67 / Dante IP Audio Routing';
+            audSub.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF843C0C' } };
+            audSub.fill = solidFill(C.orange_light);
+            audSub.alignment = { horizontal: 'center', vertical: 'middle' };
+
+            const audHdrs = ['Audio Channel / Label', 'NSA Device', 'NSA Channel', 'Interface Type', 'Conf #', 'Attached Conference', 'Function'];
+            audHdrs.forEach((h, idx) => hdrCell(wsAudio, 4, idx + 1, h, 'header_grey'));
+            const audColWidths = [24, 15, 15, 24, 12, 24, 24];
+            audColWidths.forEach((w, idx) => wsAudio.getColumn(idx + 1).width = w);
+
+            r.audioChannels.forEach((ach, idx) => {
+                const ri = 5 + idx;
+                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+
+                let itypeFill = fk;
+                if (ach.interfaceType === '4-Wire') itypeFill = 'light_blue';
+                else if (ach.interfaceType && ach.interfaceType.includes('Input')) itypeFill = 'orange_light';
+                else if (ach.interfaceType && ach.interfaceType.includes('Output')) itypeFill = 'green_light';
+
+                dataCell(wsAudio, ri, 1, ach.name, fk, null, true, 'left');
+                dataCell(wsAudio, ri, 2, ach.nsaDevice, fk);
+                dataCell(wsAudio, ri, 3, ach.nsaChannel, fk);
+                setCell(wsAudio, ri, 4, ach.interfaceType, {
+                    fill: C[itypeFill] || itypeFill,
+                    font: { bold: true, size: 10, color: { argb: 'FF1F3864' } },
+                    alignment: { horizontal: 'center', vertical: 'middle' }
+                });
+                dataCell(wsAudio, ri, 5, ach.partyLineCh || '—', fk);
+                dataCell(wsAudio, ri, 6, ach.partyLineName || '—', fk, null, false, 'left');
+                dataCell(wsAudio, ri, 7, ach.function || '—', fk);
+            });
+            wsAudio.views = [{ state: 'frozen', ySplit: 4 }];
+
+            // Download file
+            const outBase = cleanStr(r.filename.replace(/\.bol$/i, ''));
+            await downloadWorkbook(wb, `${outBase}.xlsx`);
+        }
+
+        async function exportCombinedXLSX(results) {
+            const wb = new ExcelJS.Workbook();
+            wb.creator = 'Bolero File Extractor v3.0';
+
+            const wsSummary = wb.addWorksheet('Summary');
+            titleRow(wsSummary, 'Bolero Multi-File System Export Summary', 11, 'dark_blue');
+            wsSummary.mergeCells('A2:K2');
+            const ts = wsSummary.getCell('A2');
+            ts.value = 'Exported: ' + new Date().toISOString().replace('T', ' ').slice(0, 16) + '  |  Bolero Configuration Extractor v3.0';
+            ts.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
+            ts.fill = solidFill(C.mid_blue);
+            ts.alignment = { horizontal: 'center', vertical: 'middle' };
+
+            const sumHdrs = ['#', 'File', 'Show / Project Name', 'Conferences', 'Profiles Defined',
+                             'Beltpacks Configured', 'Online in Snapshot', 'Antennas', 'Audio Channels'];
+            sumHdrs.forEach((h, idx) => hdrCell(wsSummary, 4, idx + 1, h, 'header_grey'));
+
+            results.forEach((r, idx) => {
+                const ri = 5 + idx;
+                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                const onlineBps = r.beltpacks.filter(b => b.status === 'Online').length;
+                const rowData = [
+                    idx + 1, r.filename, r.showName,
+                    Object.keys(r.channels).length,
+                    r.profiles.length,
+                    r.beltpacks.length,
+                    onlineBps,
+                    r.antennas.length,
+                    r.audioChannels.length
+                ];
+                rowData.forEach((val, cIdx) => {
+                    dataCell(wsSummary, ri, cIdx + 1, val, fk, null, false, (cIdx === 1 || cIdx === 2) ? 'left' : 'center');
+                });
+            });
+
+            const sumColWidths = [6, 38, 28, 14, 16, 20, 18, 12, 16];
+            sumColWidths.forEach((w, idx) => wsSummary.getColumn(idx + 1).width = w);
+            wsSummary.views = [{ state: 'frozen', ySplit: 4 }];
+
+            await downloadWorkbook(wb, 'bolero_combined_export.xlsx');
+        }
+    </script>
+</body>
+</html>

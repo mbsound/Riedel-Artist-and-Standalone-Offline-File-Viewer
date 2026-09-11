@@ -1,0 +1,45 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# PyInstaller / Build
+build/
+dist/
+
+# Show files, project media & offline test data
+*.bol
+*.xlsx
+*.log
+*.pdf
+*.cfg
+*.png
+*.prf
+*.rvc
+*.rvn
+*.adm
+*.sqfs
+*.package
+radonApp
+libRadon*
+bolero_server.py
+bolero_model.py
+start_editor.py
+official_web_gui/
+bolero_dense_gui/
+
+# Release bundles (allow standalone mac app)
+*.zip
+!Bolero-File-Extractor-macOS.zip
+
+# IDE
+.idea/
+.vscode/
