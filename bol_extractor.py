@@ -485,40 +485,58 @@ def extract_beltpacks(data, channels, profiles=None, audio_map=None, user_map=No
 
     return beltpacks
 
-def extract_audio_channels(data, channels):
-    audio = []
-    p_nsa = data.find(b'NSA')
-    if p_nsa == -1:
-        return audio
+def extract_audio_devices(data, p_aud):
+    """
+    Extracts all physical audio devices (NSA-002A, Punqtum Q-Series, etc.)
+    Binary pattern: (dev_id 1 byte)(dev_type 1 byte)(strlen 1 byte)(name string)\x00\xef
+    dev_type: 0x01 = NSA-002A, 0x02 = Punqtum Q-Series
+    """
+    devs = {}
+    for m in re.finditer(rb'([\x01-\x08])([\x01-\x04])([\x03-\x15])([A-Za-z0-9 _\-\.]{3,20})\x00\xef', data[p_aud:]):
+        did = m.group(1)[0]
+        dtype = m.group(2)[0]
+        slen = m.group(3)[0]
+        name = m.group(4).decode('ascii', errors='ignore')
+        if len(name) == slen and did not in devs:
+            type_label = 'NSA-002A' if dtype == 1 else ('Punqtum Q-Series' if dtype == 2 else f'Audio Device (Type {dtype})')
+            devs[did] = {'id': did, 'name': name, 'type': dtype, 'type_label': type_label}
+    return devs
 
-    pos = p_nsa
-    seen_names = set()
-    while pos < len(data) - 20:
-        if data[pos] in (1, 2, 3) and data[pos+1] in range(6):
-            b8 = data[pos:pos+8]
-            nsa_num = b8[0]
-            ch_idx = b8[1]
-            ch_num = ch_idx + 1
-            in_ch = b8[2]
-            out_ch = b8[3]
+def extract_audio_channels(data, channels, devs=None, p_aud=None):
+    if p_aud is None:
+        m_aud = re.search(rb'\x00\x00\x00\x00\x01\x00\x00\x00([\x01-\x10])\x00\x00\x00', data)
+        p_aud = m_aud.start() if m_aud else (data.find(b'NSA') if data.find(b'NSA') != -1 else len(data))
+    if devs is None:
+        devs = extract_audio_devices(data, p_aud)
+
+    audio = []
+    seen = set()
+    for pos in range(p_aud, len(data) - 20):
+        if data[pos] in devs and data[pos+1] in range(6):
+            did = data[pos]
+            ch_num = data[pos+1] + 1
+            in_ch = data[pos+2]
+            out_ch = data[pos+3]
             name_len = data[pos+8]
 
             if 2 <= name_len <= 30 and pos + 9 + name_len < len(data):
                 cand = data[pos+9:pos+9+name_len]
                 if all(32 <= b < 127 for b in cand) and not cand.startswith(b'NSA'):
-                    name_str = cand.decode()
-                    if name_str not in seen_names:
-                        seen_names.add(name_str)
+                    name_str = cand.decode('ascii')
 
-                        # Determine Interface Type
-                        if in_ch != 0xff and out_ch != 0xff:
-                            itype = "4-Wire"
-                        elif in_ch != 0xff and out_ch == 0xff:
-                            itype = "4-Wire Split (Input)"
-                        elif in_ch == 0xff and out_ch != 0xff:
-                            itype = "4-Wire Split (Output)"
-                        else:
-                            itype = "Unknown"
+                    # Determine Interface Type
+                    if in_ch != 0xff and out_ch != 0xff:
+                        itype = "4-Wire"
+                    elif in_ch != 0xff and out_ch == 0xff:
+                        itype = "4-Wire Split (Input)"
+                    elif in_ch == 0xff and out_ch != 0xff:
+                        itype = "4-Wire Split (Output)"
+                    else:
+                        itype = "4-Wire"
+
+                    key = (did, ch_num, name_str, itype)
+                    if key not in seen:
+                        seen.add(key)
 
                         post = data[pos+9+name_len: pos+9+name_len+30]
                         party_line = None
@@ -531,10 +549,14 @@ def extract_audio_channels(data, channels):
                                     flags = post[j+6] if j+6 < len(post) else 0
                                     break
 
+                        dev_info = devs.get(did, {})
+                        dev_name = dev_info.get("name", f"Dev {did}")
+                        dev_type = dev_info.get("type_label", "Audio Device")
+
                         audio.append({
                             "name": name_str,
-                            "nsa_device": f"NSA {nsa_num}",
-                            "nsa_num": nsa_num,
+                            "nsa_device": f"{dev_name} ({dev_type})",
+                            "nsa_num": did,
                             "nsa_channel": ch_num,
                             "interface_type": itype,
                             "party_line_ch": party_line,
@@ -542,39 +564,30 @@ def extract_audio_channels(data, channels):
                             "flags": flags,
                             "function": decode_flag(flags) if flags is not None else "",
                         })
-                        pos += 9 + name_len
-                        continue
-        pos += 1
 
-    # Sort audio channels by NSA Device and Channel Number
     audio.sort(key=lambda x: (x.get("nsa_num", 99), x.get("nsa_channel", 99), x.get("interface_type", "")))
     return audio
 
-def extract_nsa(data):
-    devices, triggers = [], []
-    for nb in [b'NSA1', b'NSA2', b'NSA 1', b'NSA 2', b'NSA 3']:
-        p = data.find(nb)
-        while p > 0:
-            if data[p-1] == len(nb):
-                devices.append(nb.decode())
-                break
-            p = data.find(nb, p+1)
-    for nb in [
-        b'NSA1INTrigger 1', b'NSA1INTrigger 2', b'NSA1INTrigger 3',
-        b'NSA2INTrigger 1', b'NSA2INTrigger 2', b'NSA2INTrigger 3',
-        b'NSA1OUTRADIO', b'NSA1OUTTrigger 2', b'NSA1OUTTrigger 3',
-        b'NSA2OUTTrigger 1', b'NSA2OUTTrigger 2', b'NSA2OUTTrigger 3',
-        b'RADIO TRIGGER',
-    ]:
-        p = data.find(nb)
-        if p >= 0:
-            triggers.append(nb.decode())
-    return list(dict.fromkeys(devices)), triggers
+def extract_nsa(data, p_aud=None):
+    if p_aud is None:
+        m_aud = re.search(rb'\x00\x00\x00\x00\x01\x00\x00\x00([\x01-\x10])\x00\x00\x00', data)
+        p_aud = m_aud.start() if m_aud else (data.find(b'NSA') if data.find(b'NSA') != -1 else len(data))
+    devs = extract_audio_devices(data, p_aud)
+    devices = [f"{devs[d]['name']} ({devs[d]['type_label']})" for d in sorted(devs)]
 
-def extract_net_masters(data):
-    p_nsa = data.find(b'NSA')
+    triggers = []
+    for m in re.finditer(rb'(T[IO]\s*\d+/\d+|NSA\s*\d*\s*(?:IN|OUT)?[A-Za-z0-9 _\-]*Trigger\s*\d*|RADIO\s*TRIGGER)', data[p_aud:]):
+        t_str = m.group(0).decode('ascii', errors='ignore').strip()
+        if t_str not in triggers and len(t_str) >= 4:
+            triggers.append(t_str)
+    return devices, triggers
+
+def extract_net_masters(data, p_aud=None):
+    if p_aud is None:
+        m_aud = re.search(rb'\x00\x00\x00\x00\x01\x00\x00\x00([\x01-\x10])\x00\x00\x00', data)
+        p_aud = m_aud.start() if m_aud else (data.find(b'NSA') if data.find(b'NSA') != -1 else len(data))
     net_space_id = data[0x7:0xb]
-    p = data.rfind(net_space_id, 0, p_nsa) if p_nsa != -1 else -1
+    p = data.rfind(net_space_id, 0, p_aud) if p_aud != -1 else -1
     net_space_str = ':'.join(f'{b:02x}' for b in net_space_id)
     prim_master = 'None'
     sec_master = 'None'
@@ -592,13 +605,14 @@ def extract_net_masters(data):
         'secondary_master': sec_master,
     }
 
-def extract_antennas(data, channels=None):
+def extract_antennas(data, channels=None, p_aud=None):
     antennas = []
-    p_nsa = data.find(b'NSA')
-    if p_nsa == -1: p_nsa = len(data)
-    
-    p_start = max(0, p_nsa - 800)
-    region = data[p_start:p_nsa]
+    if p_aud is None:
+        m_aud = re.search(rb'\x00\x00\x00\x00\x01\x00\x00\x00([\x01-\x10])\x00\x00\x00', data)
+        p_aud = m_aud.start() if m_aud else (data.find(b'NSA') if data.find(b'NSA') != -1 else len(data))
+
+    p_start = max(0, p_aud - 800)
+    region = data[p_start:p_aud]
     
     # Verified physical antennas in Bolero Standalone show file
     named_defs = [
@@ -619,40 +633,42 @@ def extract_antennas(data, channels=None):
             antennas.append(dict(d))
             
     if not found_any:
-        # Fallback for default unnamed antenna configurations (e.g. EU festival files)
         seen = set()
         ant_num = 1
         for i in range(len(region) - 4):
-            if region[i] in (0x65, 0x67, 0x68, 0x69) and region[i-1] not in (0x65, 0x67, 0x68, 0x69):
+            if region[i] in (0x65, 0x67, 0x68, 0x69, 0x6a) and region[i-1] not in (0x65, 0x67, 0x68, 0x69, 0x6a):
                 did = region[i:i+4]
                 did_hex = ':'.join(f'{b:02x}' for b in did)
-                if did_hex not in seen and len(did_hex) == 11:
-                    if b'NSA' not in region[max(0, i-10): i+20]:
-                        seen.add(did_hex)
-                        antennas.append({
-                            'name': f'Antenna {ant_num}',
-                            'net_idx': ant_num,
-                            'dev_id': did_hex,
-                            'sync_id': 'AES67 PTP',
-                            'master_priority': 'Normal (Auto)',
-                        })
-                        ant_num += 1
+                if did_hex not in seen and len(did_hex) == 11 and len(set(did)) >= 3:
+                    seen.add(did_hex)
+                    antennas.append({
+                        'name': f'Antenna {ant_num}',
+                        'net_idx': ant_num,
+                        'dev_id': did_hex,
+                        'sync_id': 'AES67 PTP',
+                        'master_priority': 'Normal (Auto)',
+                    })
+                    ant_num += 1
 
     antennas.sort(key=lambda x: x.get('net_idx', 999))
     return antennas
 
 def parse_bol_file(filepath):
     raw, data = decompress_bol(filepath)
+    m_aud = re.search(rb'\x00\x00\x00\x00\x01\x00\x00\x00([\x01-\x10])\x00\x00\x00', data)
+    p_aud = m_aud.start() if m_aud else (data.find(b'NSA') if data.find(b'NSA') != -1 else len(data))
+
     show_name = extract_show_name(data)
     channels  = extract_channels(data)
     audio_map = extract_audio_map(data)
     user_map  = extract_user_directory(data)
     profiles  = extract_all_profiles(data, channels, audio_map, user_map)
     beltpacks = extract_beltpacks(data, channels, profiles, audio_map, user_map)
-    antennas  = extract_antennas(data, channels)
-    net_masters = extract_net_masters(data)
-    audio_chs = extract_audio_channels(data, channels)
-    nsa_devs, nsa_triggers = extract_nsa(data)
+    antennas  = extract_antennas(data, channels, p_aud)
+    net_masters = extract_net_masters(data, p_aud)
+    audio_devs = extract_audio_devices(data, p_aud)
+    audio_chs = extract_audio_channels(data, channels, audio_devs, p_aud)
+    nsa_devs, nsa_triggers = extract_nsa(data, p_aud)
     return {
         "filepath": filepath,
         "filename": Path(filepath).name,
@@ -719,7 +735,7 @@ def write_summary(wb, results):
     ts.alignment = Alignment(horizontal="center")
 
     hdrs = ["#", "File", "Show / Project Name", "Sheet Tabs", "Conferences", "Profiles Defined",
-            "Beltpacks Configured", "Online in Snapshot", "Antennas", "Audio Channels", "NSA Devices"]
+            "Beltpacks Configured", "Online in Snapshot", "Antennas", "Audio Channels", "Audio Devices"]
     for col, h in enumerate(hdrs, 1):
         hdr_cell(ws, 4, col, h, "header_grey")
 
@@ -1038,7 +1054,10 @@ def write_channels_sheet(wb, r, tag=""):
     for ach in r["audio_chs"]:
         pl = ach["party_line_ch"]
         if pl and pl in ch_audio:
-            ch_audio[pl].append(ach["name"])
+            dev_label = ach.get("nsa_device", "").split(" ")[0]
+            label = f"{dev_label}: {ach['name']}" if dev_label else ach["name"]
+            if label not in ch_audio[pl]:
+                ch_audio[pl].append(label)
 
     for ri, (ch_num, ch_name) in enumerate(sorted(r["channels"].items()), 4):
         fk = "row_alt" if ri % 2 == 0 else "row_white"
@@ -1052,18 +1071,18 @@ def write_channels_sheet(wb, r, tag=""):
 
 # ── Sheet 6: Audio Device / NSA Sheet ─────────────────────────────────────────
 def write_audio_sheet(wb, r, tag=""):
-    ws = wb.create_sheet(title=make_sheet_title("Audio Device_NSA", tag))
-    title_row(ws, f"Audio Device & NSA Interfacing — {r['show_name']}  ({r['filename']})", 7, fill_key="purple")
+    ws = wb.create_sheet(title=make_sheet_title("Audio Devices", tag))
+    title_row(ws, f"Audio Devices & Interfacing — {r['show_name']}  ({r['filename']})", 7, fill_key="purple")
 
     ws.merge_cells("A2:G2")
     leg = ws["A2"]
-    leg.value = "NSA (Network Stream Adapter) 4-Wire Interfaces   |   AES67 / Dante IP Audio Routing"
+    leg.value = "Network Audio Devices (NSA-002A & Punqtum Q-Series)   |   AES67 IP Audio Routing"
     leg.font = Font(name="Calibri", bold=True, size=9, color="5B3A8A")
     leg.fill = fill(C["purple_light"])
     leg.alignment = Alignment(horizontal="center")
 
     hdrs = [
-        "Audio Channel / Label", "NSA Device", "NSA Channel", "Interface Type",
+        "Audio Channel / Label", "Audio Device", "Device Channel", "Interface Type",
         "Conf #", "Attached Conference", "Function"
     ]
     for col, h in enumerate(hdrs, 1):
@@ -1115,15 +1134,32 @@ def write_audio_sheet(wb, r, tag=""):
     if r["nsa_triggers"]:
         ri += 1
         ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=7)
-        c = ws.cell(row=ri, column=1, value="Configured NSA Hardware Triggers & GPIO")
+        c = ws.cell(row=ri, column=1, value="Configured Audio Device Hardware Triggers & GPIO")
         c.font = Font(name="Calibri", bold=True, size=10, color="FFFFFF")
         c.fill = fill(C["purple"]); c.alignment = Alignment(horizontal="center"); ri += 1
         for trig in r["nsa_triggers"]:
             fk = "row_alt" if ri % 2 == 0 else "row_white"
             data_cell(ws, ri, 1, trig, fk, bold=True, halign="left")
-            data_cell(ws, ri, 2, "NSA 1" if "NSA1" in trig else ("NSA 2" if "NSA2" in trig else "—"), fk, halign="center")
+
+            if "NSA1" in trig:
+                dev_txt = "NSA 1"
+            elif "NSA2" in trig:
+                dev_txt = "NSA 2"
+            elif trig.startswith("TI ") or trig.startswith("TO "):
+                parts = trig.split()[1].split('/')
+                dev_txt = f"Device {parts[0]}" if parts else "—"
+            else:
+                dev_txt = "—"
+            data_cell(ws, ri, 2, dev_txt, fk, halign="center")
             data_cell(ws, ri, 3, "GPIO / Trigger", fk, halign="center")
-            data_cell(ws, ri, 4, "Trigger Input" if "IN" in trig else ("Trigger Output" if "OUT" in trig else "Trigger"), fk, halign="center")
+
+            if "IN" in trig or trig.startswith("TI"):
+                dir_txt = "Trigger Input (GPI)"
+            elif "OUT" in trig or trig.startswith("TO"):
+                dir_txt = "Trigger Output (GPO)"
+            else:
+                dir_txt = "Trigger"
+            data_cell(ws, ri, 4, dir_txt, fk, halign="center")
             data_cell(ws, ri, 5, "—", fk, halign="center")
             data_cell(ws, ri, 6, "—", fk, halign="center")
             data_cell(ws, ri, 7, "GPIO Routing", fk, halign="left")

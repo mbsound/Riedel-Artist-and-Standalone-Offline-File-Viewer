@@ -254,13 +254,25 @@
                 }
             }
 
-            let pNsa = findIndex(data, [0x4e, 0x53, 0x41], 0); // 'NSA'
-            if (pNsa === -1) pNsa = data.length;
+            // Find Audio Devices table header: 00 00 00 00 01 00 00 00 (count) 00 00 00
+            let pAud = -1;
+            for (let i = 0; i < data.length - 12; i++) {
+                if (data[i] === 0 && data[i+1] === 0 && data[i+2] === 0 && data[i+3] === 0 &&
+                    data[i+4] === 1 && data[i+5] === 0 && data[i+6] === 0 && data[i+7] === 0 &&
+                    data[i+8] >= 1 && data[i+8] <= 16 && data[i+9] === 0 && data[i+10] === 0 && data[i+11] === 0) {
+                    pAud = i;
+                    break;
+                }
+            }
+            if (pAud === -1) {
+                pAud = findIndex(data, [0x4e, 0x53, 0x41], 0);
+                if (pAud === -1) pAud = data.length;
+            }
 
             // 5. Net Masters
             const netSpaceId = `${toHex(data[7])}:${toHex(data[8])}:${toHex(data[9])}:${toHex(data[10])}`;
             let primMaster = 'None', secMaster = 'None';
-            const pNetLast = strData.lastIndexOf(strData.slice(7, 11), pNsa);
+            const pNetLast = strData.lastIndexOf(strData.slice(7, 11), pAud);
             if (pNetLast !== -1 && pNetLast + 20 <= data.length) {
                 const pBytes = data.slice(pNetLast + 4, pNetLast + 8);
                 const sBytes = data.slice(pNetLast + 8, pNetLast + 12);
@@ -282,8 +294,8 @@
                 { name: 'BROKEN', net_idx: 50, dev_id: '68:fa:21:27', sync_id: '11:50:1b:a9', master_priority: 'Normal (Auto)' }
             ];
             const antennas = [];
-            const pStart = Math.max(0, pNsa - 800);
-            const antRegion = data.slice(pStart, pNsa);
+            const pStart = Math.max(0, pAud - 800);
+            const antRegion = data.slice(pStart, pAud);
             let foundNamed = false;
             for (const d of namedDefs) {
                 const enc = Array.from(new TextEncoder().encode(d.name));
@@ -293,36 +305,60 @@
                 }
             }
             if (!foundNamed) {
-                // Dynamic antenna discovery for EU / festival configs
                 const seenAnt = new Set();
                 let antNum = 1;
                 for (let k = 0; k < antRegion.length - 4; k++) {
-                    if ([0x65, 0x67, 0x68, 0x69].includes(antRegion[k]) && ![0x65, 0x67, 0x68, 0x69].includes(antRegion[k-1])) {
+                    if ([0x65, 0x67, 0x68, 0x69, 0x6a].includes(antRegion[k]) && ![0x65, 0x67, 0x68, 0x69, 0x6a].includes(antRegion[k-1])) {
                         const did = antRegion.slice(k, k+4);
                         const didHex = Array.from(did).map(toHex).join(':');
-                        if (!seenAnt.has(didHex) && didHex.length === 11) {
-                            const sub = antRegion.slice(Math.max(0, k-10), k+20);
-                            if (findIndex(sub, [0x4e, 0x53, 0x41], 0) === -1) {
-                                seenAnt.add(didHex);
-                                antennas.push({
-                                    name: `Antenna ${antNum}`,
-                                    net_idx: antNum,
-                                    dev_id: didHex,
-                                    sync_id: 'AES67 PTP',
-                                    master_priority: 'Normal (Auto)'
-                                });
-                                antNum++;
-                            }
+                        if (!seenAnt.has(didHex) && didHex.length === 11 && new Set(did).size >= 3) {
+                            seenAnt.add(didHex);
+                            antennas.push({
+                                name: `Antenna ${antNum}`,
+                                net_idx: antNum,
+                                dev_id: didHex,
+                                sync_id: 'AES67 PTP',
+                                master_priority: 'Normal (Auto)'
+                            });
+                            antNum++;
                         }
                     }
                 }
             }
             antennas.sort((a, b) => a.net_idx - b.net_idx);
 
-            // 7. Profiles, Beltpacks, and Audio Channels
+            // 7. Audio Devices (NSA-002A & Punqtum Q-Series)
+            const audioDevices = {};
+            for (let i = pAud; i < data.length - 25; i++) {
+                const did = data[i], dtype = data[i+1], slen = data[i+2];
+                if (did >= 1 && did <= 8 && dtype >= 1 && dtype <= 4 && slen >= 3 && slen <= 20) {
+                    if (data[i + 3 + slen] === 0x00 && data[i + 3 + slen + 1] === 0xef) {
+                        const cand = data.slice(i + 3, i + 3 + slen);
+                        if (isAscii(cand) && !audioDevices[did]) {
+                            const name = cleanStr(new TextDecoder().decode(cand));
+                            const typeLabel = dtype === 1 ? 'NSA-002A' : (dtype === 2 ? 'Punqtum Q-Series' : `Type ${dtype}`);
+                            audioDevices[did] = { id: did, name, type: dtype, typeLabel };
+                        }
+                    }
+                }
+            }
+
+            // Audio Triggers & GPIO
+            const audioTriggers = [];
+            const audSliceStr = strData.slice(pAud);
+            const trigRegex = /(T[IO]\s*\d+\/\d+|NSA\s*\d*\s*(?:IN|OUT)?[A-Za-z0-9 _\-]*Trigger\s*\d*|RADIO\s*TRIGGER)/g;
+            let tm;
+            while ((tm = trigRegex.exec(audSliceStr)) !== null) {
+                const tStr = cleanStr(tm[1]);
+                if (tStr.length >= 4 && !audioTriggers.includes(tStr)) {
+                    audioTriggers.push(tStr);
+                }
+            }
+
+            // 8. Profiles, Beltpacks, and Audio Channels
             const profiles = parseProfiles(data, channels, audioMap, userMap);
-            const beltpacks = parseBeltpacks(data, channels, audioMap, userMap, profiles, pNsa);
-            const audioChannels = parseAudioChannels(data, channels, pNsa);
+            const beltpacks = parseBeltpacks(data, channels, audioMap, userMap, profiles, pAud);
+            const audioChannels = parseAudioChannels(data, channels, pAud, audioDevices);
 
             return {
                 filename,
@@ -334,6 +370,8 @@
                 profiles,
                 beltpacks,
                 antennas,
+                audioDevices,
+                audioTriggers,
                 audioChannels
             };
         }
@@ -560,13 +598,12 @@
             return beltpacks;
         }
 
-        function parseAudioChannels(data, channels, pNsa) {
+        function parseAudioChannels(data, channels, pAud, audioDevices) {
             const audio = [];
-            let pos = pNsa;
             const seen = new Set();
-            while (pos < data.length - 20) {
-                if ([1, 2, 3].includes(data[pos]) && data[pos+1] >= 0 && data[pos+1] <= 5) {
-                    const nsaNum = data[pos];
+            for (let pos = pAud; pos < data.length - 20; pos++) {
+                const did = data[pos];
+                if (audioDevices && audioDevices[did] && data[pos+1] >= 0 && data[pos+1] <= 5) {
                     const chNum = data[pos+1] + 1;
                     const inCh = data[pos+2];
                     const outCh = data[pos+3];
@@ -576,11 +613,13 @@
                         const cand = data.slice(pos+9, pos+9+nameLen);
                         if (isAscii(cand) && !cand.slice(0, 3).every((b, idx) => b === [0x4e, 0x53, 0x41][idx])) {
                             const name = cleanStr(new TextDecoder().decode(cand));
-                            if (!seen.has(name)) {
-                                seen.add(name);
-                                let itype = "4-Wire";
-                                if (inCh !== 0xff && outCh === 0xff) itype = "4-Wire Split (Input)";
-                                else if (inCh === 0xff && outCh !== 0xff) itype = "4-Wire Split (Output)";
+                            let itype = "4-Wire";
+                            if (inCh !== 0xff && outCh === 0xff) itype = "4-Wire Split (Input)";
+                            else if (inCh === 0xff && outCh !== 0xff) itype = "4-Wire Split (Output)";
+
+                            const key = `${did}_${chNum}_${name}_${itype}`;
+                            if (!seen.has(key)) {
+                                seen.add(key);
 
                                 const post = data.slice(pos+9+nameLen, pos+9+nameLen+30);
                                 let partyLine = null, flags = null;
@@ -594,10 +633,15 @@
                                         }
                                     }
                                 }
+
+                                const devInfo = audioDevices[did] || {};
+                                const devName = devInfo.name || `Dev ${did}`;
+                                const devType = devInfo.typeLabel || 'Audio Device';
+
                                 audio.push({
                                     name,
-                                    nsaDevice: `NSA ${nsaNum}`,
-                                    nsaNum,
+                                    nsaDevice: `${devName} (${devType})`,
+                                    nsaNum: did,
                                     nsaChannel: `Channel ${chNum}`,
                                     chNum,
                                     interfaceType: itype,
@@ -611,7 +655,6 @@
                         }
                     }
                 }
-                pos++;
             }
             audio.sort((a, b) => (a.nsaNum - b.nsaNum) || (a.chNum - b.chNum));
             return audio;
@@ -738,7 +781,7 @@
                         <span>Profiles: <strong class="text-white">${parsed.profiles.length}</strong></span>
                         <span>Beltpacks: <strong class="text-emerald-400 font-bold">${parsed.beltpacks.length}</strong></span>
                         <span>Antennas: <strong class="text-white">${parsed.antennas.length}</strong></span>
-                        <span>NSA 4-Wires: <strong class="text-white">${parsed.audioChannels.length}</strong></span>
+                        <span>Audio Channels: <strong class="text-white">${parsed.audioChannels.length}</strong></span>
                     </div>
                 </div>
                 <button class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap">
@@ -791,10 +834,13 @@
             ts.alignment = { horizontal: 'center', vertical: 'middle' };
 
             const sumHdrs = ['#', 'File', 'Show / Project Name', 'Sheet Tabs', 'Conferences', 'Profiles Defined',
-                             'Beltpacks Configured', 'Online in Snapshot', 'Antennas', 'Audio Channels', 'NSA Devices'];
+                             'Beltpacks Configured', 'Online in Snapshot', 'Antennas', 'Audio Channels', 'Audio Devices'];
             sumHdrs.forEach((h, idx) => hdrCell(wsSummary, 4, idx + 1, h, 'header_grey'));
 
             const onlineBps = r.beltpacks.filter(b => b.status === 'Online').length;
+            const audioDevStr = (r.audioDevices && Object.keys(r.audioDevices).length > 0)
+                ? Object.values(r.audioDevices).map(d => `${d.name} (${d.typeLabel})`).join(', ')
+                : '—';
             const sumRow = [
                 1, r.filename, r.showName, 'Standard',
                 Object.keys(r.channels).length,
@@ -803,7 +849,7 @@
                 onlineBps,
                 r.antennas.length,
                 r.audioChannels.length,
-                'NSA 1, NSA 2'
+                audioDevStr
             ];
             sumRow.forEach((val, idx) => {
                 dataCell(wsSummary, 5, idx + 1, val, 'row_white', null, false, (idx === 1 || idx === 2) ? 'left' : 'center');
@@ -995,7 +1041,10 @@
                 
                 const profsUsing = r.profiles.filter(p => (p.keys || []).some(k => k.target === chName)).map(p => p.name).join(', ');
                 const bpsUsing = r.beltpacks.filter(b => (b.keys || []).some(k => k.target === chName)).map(b => b.label).join(', ');
-                const audioAttached = r.audioChannels.filter(a => a.partyLineName === chName).map(a => a.name).join(', ');
+                const audioAttached = r.audioChannels.filter(a => a.partyLineName === chName).map(a => {
+                    const devLabel = (a.nsaDevice || '').split(' ')[0];
+                    return devLabel ? `${devLabel}: ${a.name}` : a.name;
+                }).join(', ');
 
                 dataCell(wsConferences, ri, 1, parseInt(chNum), fk);
                 dataCell(wsConferences, ri, 2, chName, fk, null, true, 'left');
@@ -1005,23 +1054,25 @@
             }
             wsConferences.views = [{ state: 'frozen', ySplit: 3 }];
 
-            // 6. Audio Device / NSA Sheet
-            const wsAudio = wb.addWorksheet('Audio Device_NSA');
-            titleRow(wsAudio, 'Audio Device & NSA Interfacing — ' + r.showName + '  (' + r.filename + ')', 7, 'orange');
+            // 6. Audio Devices Sheet
+            const wsAudio = wb.addWorksheet('Audio Devices');
+            titleRow(wsAudio, 'Audio Devices & Interfacing — ' + r.showName + '  (' + r.filename + ')', 7, 'purple');
             wsAudio.mergeCells('A2:G2');
             const audSub = wsAudio.getCell('A2');
-            audSub.value = 'NSA (Network Stream Adapter) 4-Wire Interfaces   |   AES67 / Dante IP Audio Routing';
-            audSub.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF843C0C' } };
-            audSub.fill = solidFill(C.orange_light);
+            audSub.value = 'Network Audio Devices (NSA-002A & Punqtum Q-Series)   |   AES67 IP Audio Routing';
+            audSub.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF5B3A8A' } };
+            audSub.fill = solidFill(C.purple_light);
             audSub.alignment = { horizontal: 'center', vertical: 'middle' };
 
-            const audHdrs = ['Audio Channel / Label', 'NSA Device', 'NSA Channel', 'Interface Type', 'Conf #', 'Attached Conference', 'Function'];
-            audHdrs.forEach((h, idx) => hdrCell(wsAudio, 4, idx + 1, h, 'header_grey'));
-            const audColWidths = [24, 15, 15, 24, 12, 24, 24];
+            const audHdrs = ['Audio Channel / Label', 'Audio Device', 'Device Channel', 'Interface Type', 'Conf #', 'Attached Conference', 'Function'];
+            audHdrs.forEach((h, idx) => hdrCell(wsAudio, 4, idx + 1, h, 'purple'));
+            const audColWidths = [24, 20, 15, 24, 12, 24, 24];
             audColWidths.forEach((w, idx) => wsAudio.getColumn(idx + 1).width = w);
 
+            let lastAudioRow = 4;
             r.audioChannels.forEach((ach, idx) => {
                 const ri = 5 + idx;
+                lastAudioRow = ri;
                 const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
 
                 let itypeFill = fk;
@@ -1041,6 +1092,41 @@
                 dataCell(wsAudio, ri, 6, ach.partyLineName || '—', fk, null, false, 'left');
                 dataCell(wsAudio, ri, 7, ach.function || '—', fk);
             });
+
+            if (r.audioTriggers && r.audioTriggers.length > 0) {
+                let ri = lastAudioRow + 2;
+                wsAudio.mergeCells(ri, 1, ri, 7);
+                const c = wsAudio.getCell(ri, 1);
+                c.value = 'Configured Audio Device Hardware Triggers & GPIO';
+                c.font = { name: 'Calibri', bold: true, size: 10, color: { argb: 'FFFFFFFF' } };
+                c.fill = solidFill(C.purple);
+                c.alignment = { horizontal: 'center', vertical: 'middle' };
+                ri++;
+
+                r.audioTriggers.forEach(trig => {
+                    const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                    let devTxt = '—';
+                    if (trig.includes('NSA1')) devTxt = 'NSA 1';
+                    else if (trig.includes('NSA2')) devTxt = 'NSA 2';
+                    else if (trig.startsWith('TI ') || trig.startsWith('TO ')) {
+                        const parts = trig.split(' ')[1] ? trig.split(' ')[1].split('/') : null;
+                        devTxt = parts ? `Device ${parts[0]}` : '—';
+                    }
+
+                    let dirTxt = 'Trigger';
+                    if (trig.includes('IN') || trig.startsWith('TI')) dirTxt = 'Trigger Input (GPI)';
+                    else if (trig.includes('OUT') || trig.startsWith('TO')) dirTxt = 'Trigger Output (GPO)';
+
+                    dataCell(wsAudio, ri, 1, trig, fk, null, true, 'left');
+                    dataCell(wsAudio, ri, 2, devTxt, fk);
+                    dataCell(wsAudio, ri, 3, 'GPIO / Trigger', fk);
+                    dataCell(wsAudio, ri, 4, dirTxt, fk);
+                    dataCell(wsAudio, ri, 5, '—', fk);
+                    dataCell(wsAudio, ri, 6, '—', fk);
+                    dataCell(wsAudio, ri, 7, 'GPIO Routing', fk, null, false, 'left');
+                    ri++;
+                });
+            }
             wsAudio.views = [{ state: 'frozen', ySplit: 4 }];
 
             // Download file
