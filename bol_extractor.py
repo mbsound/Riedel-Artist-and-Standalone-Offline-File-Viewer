@@ -25,6 +25,13 @@ from pathlib import Path
 from datetime import datetime
 
 try:
+    from art_extractor import is_art_file, parse_art_file, export_to_excel as export_art_to_excel
+except ImportError:
+    is_art_file = lambda p: str(p).lower().endswith(".art")
+    parse_art_file = None
+    export_art_to_excel = None
+
+try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -50,6 +57,8 @@ C = {
     "audio_list_text": "276A3C", # Listen to Audio/NSA - Deep Forest Green Text
     "p2p_fill":        "E8E0F0", # Point to Point - Soft Lavender Fill
     "p2p_text":        "4A235A", # Point to Point - Deep Purple Text
+    "group_fill":      "FCE4D6", # Talk Groups - Soft Amber/Orange Fill
+    "group_text":      "843C0C", # Talk Groups - Deep Amber Text
     "reply_dyn_fill":  "F2F4F4", # Dynamic Reply - Soft Cool Grey Fill
     "reply_dyn_text":  "566573", # Dynamic Reply - Charcoal Text
     # Function colors
@@ -760,6 +769,8 @@ def write_summary(wb, results):
 def _get_target_styling(k_type, func_str, default_fk):
     if k_type == "Partyline":
         return "conf_fill", C["conf_text"]
+    elif k_type in ("Talkgroup", "Group", "TG"):
+        return "group_fill", C["group_text"]
     elif k_type == "Audio":
         if "Talk" in func_str:
             return "audio_talk_fill", C["audio_talk_text"]
@@ -789,7 +800,7 @@ def write_keymap_sheet(wb, r, tag=""):
     # Legend
     ws.merge_cells("A2:AA2")
     leg = ws["A2"]
-    leg.value = "Conferences (Blue)   |   Audio/NSA Talk (Amber)   |   Audio/NSA Listen (Green)   |   Point-to-Point (Purple)   |   Action Modes: Auto / Momentary / Latching   |   Key 7: Dynamic Reply or Fixed Override"
+    leg.value = "Conferences (Blue)   |   Talk Groups (Amber)   |   Audio/NSA Talk (Orange)   |   Audio/NSA Listen (Green)   |   Point-to-Point (Purple)   |   Action Modes: Auto / Momentary / Latching   |   Key 7: Dynamic Reply or Fixed Override"
     leg.font = Font(name="Calibri", bold=True, size=9, color="1F3864")
     leg.fill = fill(C["teal_light"])
     leg.alignment = Alignment(horizontal="center")
@@ -1183,11 +1194,11 @@ def export(results, output_path):
 
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description="Extract Bolero .bol files to Excel v3.0")
-    ap.add_argument("files", nargs="*")
-    ap.add_argument("-o", "--output", default="bolero_export.xlsx")
+    ap = argparse.ArgumentParser(description="Universal Intercom Configuration Extractor (Bolero & Artist)")
+    ap.add_argument("files", nargs="*", help="Files to process (.bol or .Art). Defaults to all in directory.")
+    ap.add_argument("-o", "--output", default="intercom_export.xlsx")
     ap.add_argument("-s", "--separate", action="store_true",
-                    help="Export each .bol file to its own individual .xlsx workbook")
+                    help="Export each file to its own individual .xlsx workbook")
     args = ap.parse_args()
 
     if args.files:
@@ -1196,39 +1207,65 @@ def main():
             m = glob.glob(pat)
             input_files.extend(m if m else ([pat] if os.path.isfile(pat) else []))
     else:
-        input_files = sorted(glob.glob("*.bol"))
+        input_files = sorted(glob.glob("*.bol") + glob.glob("*.Art") + glob.glob("*.art"))
 
     if not input_files:
-        print("No .bol files found."); sys.exit(1)
+        print("No .bol or .Art files found."); sys.exit(1)
 
-    print(f"Processing {len(input_files)} .bol file(s)…")
-    results = []
+    print(f"Processing {len(input_files)} file(s)...")
+    bol_results = []
+    art_results = []
+
     for fp in input_files:
-        try:
-            print(f"\nParsing: {os.path.basename(fp)}")
-            r = parse_bol_file(fp)
-            results.append(r)
-            print(f"  Show Name    : {r['show_name']}")
-            print(f"  Channels     : {len(r['channels'])}")
-            print(f"  Profiles     : {len(r['profiles'])}")
-            print(f"  Beltpack Reg : {len(r['beltpacks'])}")
-            print(f"  Antennas     : {len(r['antennas'])}")
-            print(f"  Audio Routes : {len(r['audio_chs'])}")
-            print(f"  NSA Devices  : {r['nsa_devices']}")
-        except Exception as e:
-            import traceback
-            print(f"  ERROR parsing {fp}: {e}")
-            traceback.print_exc()
+        if is_art_file(fp):
+            try:
+                print(f"\nParsing Artist Configuration: {os.path.basename(fp)}")
+                if parse_art_file is None:
+                    from art_extractor import parse_art_file as p_art, export_to_excel as e_art
+                else:
+                    p_art, e_art = parse_art_file, export_art_to_excel
+                r = p_art(fp)
+                art_results.append(r)
+                print(f"  Frame / Node : {r['frame_name']} / {r['node_name']}")
+                print(f"  Version      : {r['director_version']}")
+                print(f"  Fitted Cards : {len(r['cards'])}")
+                print(f"  Bolero Reg   : {len(r['boleros'])}")
+                print(f"  Matrix Ports : {len(r['ports'])}")
+                print(f"  Conferences  : {len(r['conferences'])}")
+                print(f"  IFB Channels : {len(r['ifbs'])}")
 
-    if not results:
-        sys.exit(1)
+                out_file = os.path.splitext(fp)[0] + ".xlsx" if (args.separate or len(input_files) > 1 or args.output == "intercom_export.xlsx") else args.output
+                e_art(r, out_file)
+                print(f"  Exported     : {out_file}")
+            except Exception as e:
+                import traceback
+                print(f"  ERROR parsing {fp}: {e}")
+                traceback.print_exc()
+        else:
+            try:
+                print(f"\nParsing Bolero Standalone: {os.path.basename(fp)}")
+                r = parse_bol_file(fp)
+                bol_results.append(r)
+                print(f"  Show Name    : {r['show_name']}")
+                print(f"  Channels     : {len(r['channels'])}")
+                print(f"  Profiles     : {len(r['profiles'])}")
+                print(f"  Beltpack Reg : {len(r['beltpacks'])}")
+                print(f"  Antennas     : {len(r['antennas'])}")
+                print(f"  Audio Routes : {len(r['audio_chs'])}")
+                print(f"  NSA Devices  : {r['nsa_devices']}")
+            except Exception as e:
+                import traceback
+                print(f"  ERROR parsing {fp}: {e}")
+                traceback.print_exc()
 
-    if args.separate:
-        for r in results:
-            out_file = os.path.splitext(r["filename"])[0] + ".xlsx"
-            export([r], out_file)
-    else:
-        export(results, args.output)
+    if bol_results:
+        if args.separate or (len(bol_results) == 1 and not art_results and args.output == "intercom_export.xlsx"):
+            for r in bol_results:
+                out_file = os.path.splitext(r["filename"])[0] + ".xlsx"
+                export([r], out_file)
+        else:
+            out_file = args.output if args.output != "intercom_export.xlsx" else "bolero_export.xlsx"
+            export(bol_results, out_file)
 
 if __name__ == "__main__":
     main()
