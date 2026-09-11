@@ -54,11 +54,11 @@ Every generated workbook contains six dedicated tabs:
 3. **`Profiles`**: Complete 23-column key mapping layout for all system profiles with assigned beltpack cross-references.
 4. **`Antennas`**: Active radio transceivers with Network Space Sync ID, Designated Primary and Secondary Master Antenna IDs, Net Indices, Hardware Serials, and Radio Master Priorities (`Normal / Auto`).
 5. **`Conferences`**: Full partyline matrix showing cross-references for which profiles, beltpacks, and audio channels are attached to each conference.
-6. **`Audio Device/NSA`**: NSA hardware channel routing detailing physical channels (Channels 1–6 across NSA 1 & NSA 2), interface types (`4-Wire` vs `4-Wire Split Input/Output`), attached conferences, and GPIO/Triggers.
+6. **`Audio Devices`**: Network audio device routing detailing physical channels across NSA-002A interfaces and Punqtum Q-Series intercom stations, interface types (`4-Wire` vs `4-Wire Split Input/Output`), attached conferences, and GPIO/Triggers.
 
 ---
 
 ## License & Attribution
 This project is open-source and licensed under the [MIT License](LICENSE).
 
-Designed for Bolero Standalone environments. Parsed from uncompressed binary structures without third-party vendor proprietary libraries.
+Designed for Bolero Standalone intercom environments. Parsed from uncompressed binary structures without third-party vendor proprietary libraries.
