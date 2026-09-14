@@ -1724,6 +1724,15 @@ def parse_art_file(file_path):
 
 
 
+def export_to_json(art_data, output_path):
+    """
+    Exports parsed Artist configuration data into a formatted JSON file.
+    """
+    with open(output_path, "w", encoding="utf-8") as jf:
+        json.dump(art_data, jf, indent=2, default=str)
+
+
+
 # Excel Exporter
 
 def export_to_excel(art_data, output_path):
@@ -2490,7 +2499,7 @@ def main():
     parser = argparse.ArgumentParser(description="Extract configuration data from Artist .Art files.")
     parser.add_argument("files", nargs="*", help="Path to .Art file(s). Defaults to all *.Art in current dir.")
     parser.add_argument("-o", "--output", help="Output Excel (.xlsx) file path.")
-    parser.add_argument("--json", nargs="?", const=True, help="Export parsed data as JSON file.")
+    parser.add_argument("--json", action="store_true", help="Export parsed data as JSON file.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose console output.")
 
     args = parser.parse_args()
@@ -2517,9 +2526,8 @@ def main():
             print(f" Successfully exported Excel workbook: {out_excel}")
 
             if args.json:
-                json_path = args.json if isinstance(args.json, str) else path.stem + "_export.json"
-                with open(json_path, "w", encoding="utf-8") as jf:
-                    json.dump(art_data, jf, indent=2)
+                json_path = os.path.splitext(out_excel)[0] + ".json"
+                export_to_json(art_data, json_path)
                 print(f" Successfully exported JSON data: {json_path}")
 
         except Exception as e:

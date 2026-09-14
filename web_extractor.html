@@ -56,17 +56,25 @@
 
     <!-- Results & Log Output -->
     <div id="results-container" class="max-w-4xl w-full mt-8 hidden space-y-4">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between flex-wrap gap-2">
             <h2 class="text-lg font-bold text-white flex items-center gap-2">
                 Processed Files
                 <span id="file-count" class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">0</span>
             </h2>
-            <button id="download-all-btn" class="hidden bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow-lg">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                </svg>
-                Download Combined Excel (.xlsx)
-            </button>
+            <div class="flex items-center gap-2 flex-wrap">
+                <button id="download-all-btn" class="hidden bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow-lg">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                    </svg>
+                    Download Combined Excel (.xlsx)
+                </button>
+                <button id="download-all-json-btn" class="hidden bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow-lg border border-slate-600">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                    </svg>
+                    Download All JSON (.json)
+                </button>
+            </div>
         </div>
 
         <div id="file-list" class="space-y-3">
@@ -82,6 +90,7 @@
         const fileList = document.getElementById('file-list');
         const fileCount = document.getElementById('file-count');
         const downloadAllBtn = document.getElementById('download-all-btn');
+        const downloadAllJsonBtn = document.getElementById('download-all-json-btn');
 
         let extractedResults = [];
 
@@ -138,6 +147,15 @@
                 downloadAllBtn.onclick = () => exportCombinedXLSX(bolOnly);
             } else {
                 downloadAllBtn.classList.add('hidden');
+            }
+
+            if (extractedResults.length > 1) {
+                downloadAllJsonBtn.classList.remove('hidden');
+                downloadAllJsonBtn.onclick = () => {
+                    downloadJSON(extractedResults, 'intercom_configs_export.json');
+                };
+            } else {
+                downloadAllJsonBtn.classList.add('hidden');
             }
         }
 
@@ -807,6 +825,22 @@ function parseBolBuffer(rawBytes, filename) {
             setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
 
+        function downloadJSON(dataObj, filename) {
+            const jsonStr = JSON.stringify(dataObj, (key, value) => {
+                if (value instanceof Set) return Array.from(value);
+                return value;
+            }, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
         // Render Cards & Excel Export
         function renderResultCard(parsed) {
             const card = document.createElement('div');
@@ -833,26 +867,40 @@ function parseBolBuffer(rawBytes, filename) {
                             <span>IFBs: <strong class="text-white">${parsed.ifbs.length}</strong></span>
                         </div>
                     </div>
-                    <button class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                        </svg>
-                        Download Excel (.xlsx)
-                    </button>
+                    <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                        <button class="download-excel-btn bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                            Download Excel (.xlsx)
+                        </button>
+                        <button class="download-json-btn bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap border border-slate-600">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                            </svg>
+                            Download JSON (.json)
+                        </button>
+                    </div>
                 `;
-                const btn = card.querySelector('button');
-                btn.onclick = async () => {
-                    btn.disabled = true;
-                    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Formatting Excel...`;
+                const btnExcel = card.querySelector('.download-excel-btn');
+                btnExcel.onclick = async () => {
+                    btnExcel.disabled = true;
+                    btnExcel.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Formatting Excel...`;
                     try {
                         await exportArtXLSX(parsed);
                     } catch (e) {
                         console.error(e);
                         alert("Export error: " + e.message);
                     } finally {
-                        btn.disabled = false;
-                        btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> Download Excel (.xlsx)`;
+                        btnExcel.disabled = false;
+                        btnExcel.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> Download Excel (.xlsx)`;
                     }
+                };
+
+                const btnJson = card.querySelector('.download-json-btn');
+                btnJson.onclick = () => {
+                    const baseName = (parsed.file_name || 'artist_config').replace(/\.[^/.]+$/, '');
+                    downloadJSON(parsed, `${baseName}.json`);
                 };
             } else {
                 card.innerHTML = `
@@ -870,26 +918,40 @@ function parseBolBuffer(rawBytes, filename) {
                             <span>Audio Channels: <strong class="text-white">${parsed.audioChannels.length}</strong></span>
                         </div>
                     </div>
-                    <button class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                        </svg>
-                        Download Excel (.xlsx)
-                    </button>
+                    <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                        <button class="download-excel-btn bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                            Download Excel (.xlsx)
+                        </button>
+                        <button class="download-json-btn bg-slate-700 hover:bg-slate-600 text-slate-200 hover:text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1.5 shadow whitespace-nowrap border border-slate-600">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                            </svg>
+                            Download JSON (.json)
+                        </button>
+                    </div>
                 `;
-                const btn = card.querySelector('button');
-                btn.onclick = async () => {
-                    btn.disabled = true;
-                    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Formatting Excel...`;
+                const btnExcel = card.querySelector('.download-excel-btn');
+                btnExcel.onclick = async () => {
+                    btnExcel.disabled = true;
+                    btnExcel.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Formatting Excel...`;
                     try {
                         await exportSingleXLSX(parsed);
                     } catch (e) {
                         console.error(e);
                         alert("Export error: " + e.message);
                     } finally {
-                        btn.disabled = false;
-                        btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> Download Excel (.xlsx)`;
+                        btnExcel.disabled = false;
+                        btnExcel.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> Download Excel (.xlsx)`;
                     }
+                };
+
+                const btnJson = card.querySelector('.download-json-btn');
+                btnJson.onclick = () => {
+                    const baseName = (parsed.filename || 'bolero_config').replace(/\.[^/.]+$/, '');
+                    downloadJSON(parsed, `${baseName}.json`);
                 };
             }
             fileList.appendChild(card);

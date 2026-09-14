@@ -20,16 +20,17 @@ Usage:
     python3 bol_extractor.py -o export.xlsx    # specify output file name
 """
 
-import zlib, re, sys, os, glob
+import zlib, re, sys, os, glob, json
 from pathlib import Path
 from datetime import datetime
 
 try:
-    from art_extractor import is_art_file, parse_art_file, export_to_excel as export_art_to_excel
+    from art_extractor import is_art_file, parse_art_file, export_to_excel as export_art_to_excel, export_to_json as export_art_to_json
 except ImportError:
     is_art_file = lambda p: str(p).lower().endswith(".art")
     parse_art_file = None
     export_art_to_excel = None
+    export_art_to_json = None
 
 try:
     import openpyxl
@@ -1192,6 +1193,14 @@ def export(results, output_path):
     wb.save(output_path)
     print(f"\nSuccessfully saved full workbook: {output_path}")
 
+def export_to_json(data_obj, output_path):
+    """
+    Exports parsed Bolero or Artist configuration data into a formatted JSON file.
+    """
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data_obj, f, indent=2, default=str)
+    print(f"Successfully saved JSON export: {output_path}")
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="Universal Intercom Configuration Extractor (Bolero & Artist)")
@@ -1199,6 +1208,8 @@ def main():
     ap.add_argument("-o", "--output", default="intercom_export.xlsx")
     ap.add_argument("-s", "--separate", action="store_true",
                     help="Export each file to its own individual .xlsx workbook")
+    ap.add_argument("--json", action="store_true",
+                    help="Also export parsed configuration data as .json file(s)")
     args = ap.parse_args()
 
     if args.files:
@@ -1221,9 +1232,9 @@ def main():
             try:
                 print(f"\nParsing Artist Configuration: {os.path.basename(fp)}")
                 if parse_art_file is None:
-                    from art_extractor import parse_art_file as p_art, export_to_excel as e_art
+                    from art_extractor import parse_art_file as p_art, export_to_excel as e_art, export_to_json as e_art_json
                 else:
-                    p_art, e_art = parse_art_file, export_art_to_excel
+                    p_art, e_art, e_art_json = parse_art_file, export_art_to_excel, export_art_to_json
                 r = p_art(fp)
                 art_results.append(r)
                 print(f"  Frame / Node : {r['frame_name']} / {r['node_name']}")
@@ -1237,6 +1248,14 @@ def main():
                 out_file = os.path.splitext(fp)[0] + ".xlsx" if (args.separate or len(input_files) > 1 or args.output == "intercom_export.xlsx") else args.output
                 e_art(r, out_file)
                 print(f"  Exported     : {out_file}")
+
+                if args.json:
+                    out_json = os.path.splitext(fp)[0] + ".json"
+                    if e_art_json:
+                        e_art_json(r, out_json)
+                    else:
+                        export_to_json(r, out_json)
+                    print(f"  JSON Export  : {out_json}")
             except Exception as e:
                 import traceback
                 print(f"  ERROR parsing {fp}: {e}")
@@ -1253,6 +1272,10 @@ def main():
                 print(f"  Antennas     : {len(r['antennas'])}")
                 print(f"  Audio Routes : {len(r['audio_chs'])}")
                 print(f"  NSA Devices  : {r['nsa_devices']}")
+
+                if args.json:
+                    out_json = os.path.splitext(fp)[0] + ".json"
+                    export_to_json(r, out_json)
             except Exception as e:
                 import traceback
                 print(f"  ERROR parsing {fp}: {e}")
@@ -1266,6 +1289,9 @@ def main():
         else:
             out_file = args.output if args.output != "intercom_export.xlsx" else "bolero_export.xlsx"
             export(bol_results, out_file)
+
+        if args.json and len(bol_results) > 1:
+            export_to_json(bol_results, "bolero_combined_export.json")
 
 if __name__ == "__main__":
     main()

@@ -4,8 +4,8 @@ import os
 import subprocess
 import glob
 from pathlib import Path
-from bol_extractor import parse_bol_file, export
-from art_extractor import is_art_file, parse_art_file, export_to_excel as export_art_to_excel
+from bol_extractor import parse_bol_file, export, export_to_json as export_bol_to_json
+from art_extractor import is_art_file, parse_art_file, export_to_excel as export_art_to_excel, export_to_json as export_art_to_json
 
 def run_applescript(script):
     p = subprocess.Popen(["osascript", "-e", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -41,6 +41,9 @@ def show_alert(title, message):
 def main():
     # If files were passed via drag-and-drop or command line args:
     files = sys.argv[1:]
+    export_json = "--json" in files
+    if export_json:
+        files.remove("--json")
 
     # If no files passed directly, prompt user with macOS Finder File Chooser
     if not files:
@@ -67,6 +70,10 @@ def main():
                 out_path = os.path.join(base_dir, f"{base_name}.xlsx")
                 export_art_to_excel(r, out_path)
                 generated_files.append(out_path)
+                if export_json:
+                    out_json = os.path.join(base_dir, f"{base_name}.json")
+                    export_art_to_json(r, out_json)
+                    generated_files.append(out_json)
             else:
                 r = parse_bol_file(f)
                 bol_results.append(r)
@@ -75,6 +82,10 @@ def main():
                 out_path = os.path.join(base_dir, f"{base_name}.xlsx")
                 export([r], out_path)
                 generated_files.append(out_path)
+                if export_json:
+                    out_json = os.path.join(base_dir, f"{base_name}.json")
+                    export_bol_to_json(r, out_json)
+                    generated_files.append(out_json)
         except Exception as e:
             failed.append((f, str(e)))
 
