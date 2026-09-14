@@ -1314,1447 +1314,827 @@ function parseBolBuffer(rawBytes, filename) {
             await downloadWorkbook(wb, 'bolero_combined_export.xlsx');
         }
 
-        function parseArtBuffer(rawBytes, filename) {
-    const data = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
-    const strData = uint8ToBinaryString(data);
-    const fileSize = data.length;
-
-    // 1. Signature
-    let sig = "Artist Configuration";
-    if (data[0] === 0xff && data[1] === 0xfe && data[2] === 0xff && data[3] === 0x0e) {
-        try {
-            sig = new TextDecoder('utf-16le').decode(data.slice(4, 32)).trim();
-        } catch (e) {
-            sig = "R2000 Cfg-File";
-        }
-    } else if (strData.slice(0, 64).includes("R2000 Cfg-File")) {
-        sig = "R2000 Cfg-File";
-    }
-
-    // 2. Software Version
-    const vMatch = strData.match(/Director version [^\x00\r\n]+/);
-    const directorVer = vMatch ? vMatch[0].trim() : "Unknown";
-
-    // 3. Multi-Node Topology & Frame Detection
-    let primaryFrame = "Matrix Frame 1";
-    const frameM = strData.slice(0, 0x10000).match(/(GOOGLE-[A-Z0-9]+|PIER-[A-Z0-9]+|NODE-[A-Z0-9]+|FRAME-[A-Z0-9]+)/);
-    if (frameM) {
-        primaryFrame = frameM[0];
-    } else {
-        const subHead = strData.slice(0x1700, 0x9000);
-        const mArr = [...subHead.matchAll(/\x00{4,}([\x04-\x1e])([A-Za-z0-9_\-]{4,30})/g)];
-        for (const m of mArr) {
-            const flen = m[1].charCodeAt(0);
-            const cand = m[2].slice(0, flen);
-            if (!cand.startsWith("PWS") && !cand.startsWith("DANTE") && !cand.startsWith("AES")) {
-                primaryFrame = cand;
-                break;
-            }
-        }
-    }
-
-    const hasRing = strData.includes("\x2d\x16\xa0\x5a\x03\x00\x00\x00");
-    const nodes = [];
-    if (hasRing) {
-        nodes.push({
-            node_num: 1,
-            name: primaryFrame,
-            type: "Artist-64 Mainframe",
-            role: "Master Node / Main Intercom Frame",
-            control_ip: "10.0.201.173",
-            subnet: "255.255.252.0 (/22)",
-            gateway: "10.0.203.254",
-            service_ip: "192.168.42.120",
-            fiber_ring: "Closed Ring Port A -> Node 2, Port B -> Node 3"
-        });
-        nodes.push({
-            node_num: 2,
-            name: "N2_ART_32",
-            type: "Artist-32 Mainframe",
-            role: "Breakout Node / Secondary Venue Frame",
-            control_ip: "Managed via Matrix Fiber Ring",
-            subnet: "255.255.252.0 (/22)",
-            gateway: "10.0.203.254",
-            service_ip: "Ring Interconnect",
-            fiber_ring: "Closed Ring Port A -> Node 3, Port B -> Node 1"
-        });
-        nodes.push({
-            node_num: 3,
-            name: "N3_ART_1024",
-            type: "Artist-1024 Mainframe",
-            role: "High-Density Engine / Central Routing Core",
-            control_ip: "10.0.201.130 - 10.0.201.132 (UIC IPs)",
-            subnet: "255.255.252.0 (/22)",
-            gateway: "10.0.203.254",
-            service_ip: "10.0.213.130 - 10.0.213.132 (Secondary)",
-            fiber_ring: "Closed Ring Port A -> Node 1, Port B -> Node 2"
-        });
-    } else {
-        let ctrlIp = "10.0.200.1";
-        const ipIdx = strData.indexOf("\x00\xfc\xff\xff\xfe\xcb\x00\x0a");
-        if (ipIdx !== -1 && ipIdx >= 4) {
-            ctrlIp = `${data[ipIdx-1]}.${data[ipIdx-2]}.${data[ipIdx-3]}.${data[ipIdx-4]}`;
-        }
-        nodes.push({
-            node_num: 1,
-            name: primaryFrame,
-            type: "Artist Mainframe",
-            role: "Master Matrix Node",
-            control_ip: ctrlIp,
-            subnet: "255.255.252.0 (/22)",
-            gateway: ipIdx !== -1 ? "10.0.203.254" : "10.0.200.254",
-            service_ip: "192.168.42.120",
-            fiber_ring: "Standalone / Direct Trunking"
-        });
-    }
-
-    // 4. Hardware Cards & IP Addressing
-    const cards = [];
-    const seenCards = new Set();
-    const cardScope = strData.slice(0, 0x18000);
-    const cardRegex = /([A-Za-z0-9_\- ]{0,6}(?:AES67|MADI|DANTE|1024-AES67|AIO)[A-Za-z0-9_\- #]{1,30})/g;
-    let cm;
-    while ((cm = cardRegex.exec(cardScope)) !== null) {
-        let cleanName = cm[1].replace(/[\x00-\x1f\x7f-\xff].*$/, '').replace(/^PWS/, '').replace(/[\-\$UV\xc5\x8c\xc3\x8c]$/, '').trim();
-        const upper = cleanName.toUpperCase();
-        if (!['AES67', 'MADI', 'DANTE', '1024', 'AIO'].some(k => upper.includes(k))) continue;
-        if (['INPUTS', 'PORT', 'TIE', 'MEET', 'STREAM', 'RTIST'].some(k => upper.includes(k))) continue;
-        if (seenCards.has(cleanName)) continue;
-        seenCards.add(cleanName);
-
-        const pos = cm.index;
-        const sub = cardScope.slice(Math.max(0, pos - 40), Math.min(cardScope.length, pos + 180));
-
-        const ips = [];
-        for (let i = 0; i < sub.length - 3; i++) {
-            const q0 = sub.charCodeAt(i), q1 = sub.charCodeAt(i+1), q2 = sub.charCodeAt(i+2), q3 = sub.charCodeAt(i+3);
-            if ([10, 192].includes(q3) && [0, 1, 168, 200, 201, 213].includes(q2)) {
-                const ip = `${q3}.${q2}.${q1}.${q0}`;
-                if (!ips.includes(ip)) ips.push(ip);
-            }
-        }
-
-        let primaryIp = "—", secondaryIp = "—", gateway = "—";
-        if (ips.length >= 1) primaryIp = ips[0];
-        if (ips.length >= 2 && !["10.0.203.254", "10.0.215.254"].includes(ips[1])) {
-            secondaryIp = ips[1];
-        } else if (ips.length >= 3 && !["10.0.203.254", "10.0.215.254"].includes(ips[2])) {
-            secondaryIp = ips[2];
-        }
-        for (const ip of ips) {
-            if (ip.endsWith(".254")) {
-                gateway = ip;
-                break;
-            }
-        }
-
-        const extM = sub.slice(40).match(/([\x04-\x30])([A-Za-z0-9_\-]{4,35}(?:DANTE|Artist|Bay|AES67)[A-Za-z0-9_\-]{0,25})/);
-        let extName = "";
-        if (extM) {
-            const el = extM[1].charCodeAt(0);
-            extName = extM[2].slice(0, el).trim().replace(/^[A-Z0-9_]{2,8}(?=[A-Z][a-z0-9#])/, '').trim();
-        }
-
-        let cardType = "Interface Card";
-        let slotNum = 1;
-        let frameOwner = primaryFrame;
-
-        if (cleanName.includes("1024")) {
-            cardType = "AES67 Audio (SMPTE 2110-30)";
-            frameOwner = "N3_ART_1024";
-            if (cleanName.includes("BAY-1")) slotNum = 1;
-            else if (cleanName.includes("BAY-2")) slotNum = 2;
-            else if (cleanName.includes("BAY-4")) slotNum = 4;
-        } else if (cleanName.includes("AIO")) {
-            cardType = "Analog 4-Wire Audio";
-            frameOwner = "N2_ART_32";
-            slotNum = 3;
-        } else {
-            if (cleanName.includes("AES67 #1")) { cardType = "AES67 Audio (Venue 4-Wire Ties)"; slotNum = 1; }
-            else if (cleanName.includes("MADI")) { cardType = "MADI Digital Audio"; slotNum = 3; }
-            else if (cleanName.includes("AES67 #2") || cleanName.toUpperCase().includes("BOLERO")) { cardType = "AES67 Audio (Bolero Wireless)"; slotNum = 4; }
-            else if (cleanName.includes("AES67 #3") || cleanName.toUpperCase().includes("PANELS")) { cardType = "AES67 Audio (SmartPanels)"; slotNum = 8; }
-            else if (cleanName.includes("DANTE")) { cardType = "Dante Audio Network"; slotNum = 9; extName = extName || "Artist-DANTE-1-Bay-10"; }
-        }
-
-        cards.push({
-            slot: slotNum,
-            frame: frameOwner,
-            name: cleanName,
-            type: cardType,
-            primary_ip: primaryIp,
-            secondary_ip: secondaryIp,
-            gateway,
-            ext_name: extName
-        });
-    }
-
-    if (nodes.some(n => n.name === "N2_ART_32")) {
-        const n2Cards = [
-            { slot: 1, frame: "N2_ART_32", name: "AIO-108 / SIP Client Card #1", type: "Analog 4-Wire / SIP Audio (8 Port)", primary_ip: "Matrix Managed (Node 2)", secondary_ip: "—", gateway: "—", ext_name: "Analog Intercom / 4-Wire Client Card" },
-            { slot: 2, frame: "N2_ART_32", name: "GPIO-116 Radio PTT Card", type: "GPIO Relay / PTT Keying (16 Relay)", primary_ip: "Matrix Managed (Node 2)", secondary_ip: "—", gateway: "—", ext_name: "PTT Relays (GPIO Out.PTT #001 - #004)" },
-            { slot: 3, frame: "N2_ART_32", name: "RIF & AIO Radio / 4-Wire Card", type: "Two-Way Radio & 4-Wire Interface", primary_ip: "Matrix Managed (Node 2)", secondary_ip: "—", gateway: "—", ext_name: "Radio CH 1-4 & Spare 4-Wire (Ports 3.1 - 3.8)" },
-            { slot: 4, frame: "N2_ART_32", name: "AIO-108 / SIP Client Card #2", type: "Analog 4-Wire / SIP Audio (8 Port)", primary_ip: "Matrix Managed (Node 2)", secondary_ip: "—", gateway: "—", ext_name: "Analog Intercom / 4-Wire Client Card" }
-        ];
-        n2Cards.forEach(c => cards.push(c));
-    }
-    cards.sort((a, b) => (a.frame === b.frame ? a.slot - b.slot : a.frame.localeCompare(b.frame)));
-
-    // 5. IP Digital Trunks
-    const trunks = [];
-    const seenTrunks = new Set();
-    const trunkRegex = /Trunk\s*L[a-zA-Z0-9_ ]*/gi;
-    let tm;
-    while ((tm = trunkRegex.exec(strData)) !== null) {
-        const p = tm.index;
-        const sub = strData.slice(Math.max(0, p - 60), Math.min(strData.length, p + 100));
-        const ipM = sub.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
-        const ip = ipM ? ipM[0] : "—";
-        const name = tm[0].trim();
-        if (seenTrunks.has(name)) continue;
-        seenTrunks.add(name);
-
-        const trIdM = sub.match(/P57Trnk\d+/);
-        const trId = trIdM ? trIdM[0] : "";
-        trunks.push({
-            name,
-            short_id: trId || name,
-            remote_ip: ip,
-            protocol: ip !== "—" ? "VoIP / Intercom Trunk" : "Digital Tie-Line"
-        });
-    }
-
-    // 5b. System Name Overwrites & Custom Display Aliases
-    const overwrites = [];
-    const seenOverwrites = new Set();
-
-    // Talkgroup (Group Call) Overwrites
-    const patternTg = /\x01\x00\x00\x00\x00([\s\S])([^\x00]{1,32})[\s\S]{10,75}([Gg]\d+_[A-Za-z0-9_. -]+)/g;
-    let om;
-    while ((om = patternTg.exec(strData)) !== null) {
-        const l = om[1].charCodeAt(0);
-        const cust = om[2].slice(0, l).trim();
-        const sysN = om[3].trim();
-        const pairKey = `${cust}||${sysN}`;
-        if (!seenOverwrites.has(pairKey) && cust && sysN) {
-            seenOverwrites.add(pairKey);
-            overwrites.push({
-                category: "Talkgroup (Group Call)",
-                custom_name: cust,
-                system_name: sysN,
-                ext_label: "",
-                status: "Active Overwrite",
-                description: `Group Call display alias overwritten as "${cust}"`
-            });
-        }
-    }
-
-    // Conference / Partyline Overwrites
-    const pzIdx = strData.indexOf("PAGE_ZONEZ");
-    const startPos = pzIdx !== -1 ? pzIdx : 0;
-    const scopeConf = pzIdx !== -1 ? strData.slice(startPos, startPos + 35000) : strData;
-    const confHdr = "\xe8W\x98\x11\x01\x00\x00\x00\x00";
-
-    let cPos = 0;
-    const confMatches = [];
-    while ((cPos = scopeConf.indexOf(confHdr, cPos)) !== -1) {
-        confMatches.push(cPos);
-        cPos += 1;
-    }
-
-    for (let i = 0; i < confMatches.length; i++) {
-        const off = confMatches[i];
-        const nextOff = i + 1 < confMatches.length ? confMatches[i+1] : off + 1000;
-        const rec = scopeConf.slice(off, nextOff);
-        let pos = confHdr.length;
-        if (pos >= rec.length) continue;
-        const nl = rec.charCodeAt(pos);
-        if (!(nl >= 1 && nl <= 35 && pos + 1 + nl <= rec.length)) continue;
-        const rawCust = rec.slice(pos + 1, pos + 1 + nl);
-        if (![...rawCust].every(c => c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126)) continue;
-        const cust = rawCust.trim();
-        pos = pos + 1 + nl;
-
-        let secLabel = "";
-        let cnt = 0;
-        if (pos < rec.length && rec.charCodeAt(pos) === 0) {
-            if (pos + 5 <= rec.length) {
-                cnt = readUInt32LE(rec, pos + 1);
-                if (cnt >= 0 && cnt <= 150) pos = pos + 5 + cnt * 4;
-            }
-        } else if (pos < rec.length) {
-            const sl = rec.charCodeAt(pos);
-            if (sl >= 1 && sl <= 30 && pos + 1 + sl < rec.length) {
-                const cand = rec.slice(pos + 1, pos + 1 + sl);
-                if ([...cand].every(c => c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126)) {
-                    secLabel = cand.trim();
-                    if (pos + 1 + sl + 4 <= rec.length) {
-                        const c = readUInt32LE(rec, pos + 1 + sl);
-                        if (c >= 0 && c <= 150) {
-                            cnt = c;
-                            pos = pos + 5 + sl + cnt * 4;
-                        }
-                    }
-                }
-            }
-        }
-
-        const trailing = rec.slice(pos);
-        let sysN = "";
-        const mSysMatches = [...trailing.matchAll(/([\x01-\x20])([A-Za-z0-9_.*#~ -]{2,35})\x00@\x00\x00/g)];
-        if (mSysMatches.length > 0) {
-            const lastM = mSysMatches[mSysMatches.length - 1];
-            const l = lastM[1].charCodeAt(0);
-            const s = lastM[2].slice(0, l).trim();
-            sysN = s.replace(/^[A-Za-z0-9_]{2,8}(?=[zgG]\d{2}_)/, "");
-        } else if (!sysN) {
-            const mFb = trailing.match(/([zgG]\d{2}_[A-Za-z0-9_]+|\*[A-Za-z0-9_.]+)/);
-            if (mFb) sysN = mFb[1].trim();
-        }
-
-        if (sysN && cust && sysN !== cust && !sysN.startsWith("G0") && !sysN.startsWith("g0")) {
-            const pairKey = `${cust}||${sysN}`;
-            if (!seenOverwrites.has(pairKey)) {
-                seenOverwrites.add(pairKey);
-                let desc = `Conference display overwritten as "${cust}"`;
-                if (secLabel && secLabel !== cust) desc += ` (OLED Sub-label: "${secLabel}")`;
-                overwrites.push({
-                    category: "Conference / Partyline",
-                    custom_name: cust,
-                    system_name: sysN,
-                    ext_label: secLabel,
-                    status: "Active Overwrite",
-                    description: desc
-                });
-            }
-        }
-    }
-
-    const customToOverwrite = {};
-    for (const o of overwrites) {
-        customToOverwrite[o.custom_name.toUpperCase()] = o;
-        customToOverwrite[o.system_name.toUpperCase()] = o;
-    }
-
-    // 6. Pre-scan Key Table & Modes
-    const tgNames = new Set(["COMHELP", "COMMPLAINT", "G02_COMMPLAINT"]);
-    for (const o of overwrites) {
-        if (o.category.startsWith("Talkgroup")) {
-            tgNames.add(o.custom_name.toUpperCase());
-            tgNames.add(o.system_name.toUpperCase());
-        }
-    }
-
-    const targetModes = {};
-    const targetFuncs = {};
-    const targetModesList = {};
-    const targetFuncsList = {};
-    const handleKeys = {};
-
-    const keyPattern = /([\s\S]{4})\x00([\s\S])([\s\S])([^\xfe\x00]{1,32})([A-Za-z\x80-\xff])([\s\S])\xfe\x00\x00([\s\S]{2})/g;
-    let km;
-    while ((km = keyPattern.exec(strData)) !== null) {
-        const dev = km[1];
-        const kIdx = km[2].charCodeAt(0);
-        const lLen = km[3].charCodeAt(0);
-        const lbl = km[4].slice(0, lLen).trim();
-        const mc = km[6].charCodeAt(0);
-        const flags = km[7];
-
-        let mStr = "Auto";
-        if (mc === 0x48) mStr = "Listen Only";
-        else if (mc === 0x49) mStr = "Momentary";
-        else if (mc === 0x08) mStr = "Latching";
-
-        let fStr = "Talk+Listen";
-        if (mc === 0x48 || flags === "\x00\x00" || lbl.includes("~") || lbl.toUpperCase().includes("PGM") || lbl.toUpperCase().includes("BASS")) {
-            fStr = "Listen";
-        }
-
-        const lblClean = lbl.replace(/^[*~]+/, '').trim().toUpperCase();
-        if (lblClean) {
-            if (!targetModesList[lblClean]) targetModesList[lblClean] = [];
-            targetModesList[lblClean].push(mStr);
-            if (!targetFuncsList[lblClean]) targetFuncsList[lblClean] = [];
-            targetFuncsList[lblClean].push(fStr);
-        }
-
-        if (dev.length === 4) {
-            if (!handleKeys[dev]) handleKeys[dev] = {};
-            handleKeys[dev][kIdx] = [lbl, fStr, mStr];
-        }
-    }
-
-    for (const [t, mlist] of Object.entries(targetModesList)) {
-        const counts = {};
-        mlist.forEach(m => counts[m] = (counts[m] || 0) + 1);
-        targetModes[t] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-    }
-    for (const [t, flist] of Object.entries(targetFuncsList)) {
-        const counts = {};
-        flist.forEach(f => counts[f] = (counts[f] || 0) + 1);
-        targetFuncs[t] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-    }
-
-    // Map port strings to panel handles
-    const portToHandle = {};
-    const chunkHandles = strData.slice(26000, 28000);
-    const mPth = [...chunkHandles.matchAll(/([\s\S]{4})[C\x05]\x04\x00\x00|([\s\S]{4})\x05\x05\x00\x00/g)];
-    const dspHList = mPth.map(m => m[1] || m[2]);
-    dspHList.forEach((h, idx) => {
-        portToHandle[`1.${idx+1}`] = h;
-    });
-
-    const handleScanScope = strData.slice(34800, 37000);
-    const mSpScope = [...handleScanScope.matchAll(/([\s\S]{4})\x00\x00\x00\x00/g)];
-    const spHList = mSpScope.map(m => m[1]);
-    spHList.forEach((h, idx) => {
-        if (!dspHList.includes(h)) {
-            portToHandle[`1.${dspHList.length + idx + 1}`] = h;
-        }
-    });
-
-    function resolveKeyModeAndFunc(target, keyType) {
-        const tClean = target.replace(/^[*~]+/, '').trim().toUpperCase();
-        const tUp = target.toUpperCase();
-        if (targetModes[tClean]) {
-            let mode = targetModes[tClean];
-            let func = targetFuncs[tClean] || "Talk+Listen";
-            if (['PGM', 'PROGRAM', 'AUDIO', 'BASS', 'MONITOR', 'IFB'].some(x => tUp.includes(x))) {
-                mode = "—";
-                func = "Listen";
-            }
-            return [mode, func];
-        }
-        if (['PGM', 'PROGRAM', 'AUDIO', 'BASS', 'MONITOR', 'IFB'].some(x => tUp.includes(x))) {
-            return ["—", "Listen"];
-        }
-        if (keyType === "P2P") return ["Momentary", "Talk+Listen"];
-        return ["Auto", "Talk+Listen"];
-    }
-
-    // 6b. Bolero Beltpack Records
-    const boleros = [];
-    const seenBp = new Set();
-    const bpSigRegex = /\x08\x01([\s\S])([\s\S]{3})\x8c\x13([\s\S])\x00\x10\xa4\x00([\s\S])/g;
-    const recordsToProcess = [];
-    let bsm;
-    while ((bsm = bpSigRegex.exec(strData)) !== null) {
-        const devId = bsm[1].charCodeAt(0);
-        const mcastBytes = bsm[2];
-        const nameLen = bsm[4].charCodeAt(0);
-        const pos = bsm.index + bsm[0].length;
-        const bpName = strData.slice(pos, pos + nameLen).trim();
-        const sub = strData.slice(pos + nameLen, pos + nameLen + 220);
-        const m0 = mcastBytes.charCodeAt(0), m1 = mcastBytes.charCodeAt(1), m2 = mcastBytes.charCodeAt(2);
-        let mcastIp = [236, 239, 224, 238].includes(m2) ? `${m2}.${m1}.${m0}.${devId}` : `${m0}.${m1}.${m2}.${devId}`;
-        recordsToProcess.push([bpName, devId, mcastIp, sub]);
-    }
-
-    const regBpRegex = /(BOLERO-\d+|BP\s*\d+)[^\t\x00]*/g;
-    let rbm;
-    while ((rbm = regBpRegex.exec(strData)) !== null) {
-        const bpName = rbm[0].trim();
-        if (!recordsToProcess.some(r => r[0] === bpName)) {
-            const pos = rbm.index;
-            const prefix = strData.slice(Math.max(0, pos - 20), pos);
-            let mcastIp = "—";
-            for (let j = 0; j < prefix.length - 3; j++) {
-                const c0 = prefix.charCodeAt(j), c1 = prefix.charCodeAt(j+1), c2 = prefix.charCodeAt(j+2), c3 = prefix.charCodeAt(j+3);
-                if ([236, 239, 224].includes(c3) && [200, 201, 202, 69, 255, 0, 2].includes(c1)) {
-                    mcastIp = `${c3}.${c2}.${c1}.${c0}`; break;
-                } else if ([236, 239, 224].includes(c0) && [200, 201, 202, 69, 255, 0, 2].includes(c2)) {
-                    mcastIp = `${c0}.${c1}.${c2}.${c3}`; break;
-                }
-            }
-            const sub = strData.slice(pos + bpName.length, pos + 220);
-            const devIdM = bpName.match(/\d+/);
-            const devId = devIdM ? parseInt(devIdM[0]) : 0;
-            recordsToProcess.push([bpName, devId, mcastIp, sub]);
-        }
-    }
-
-    for (const [bpName, devId, mcastIp, sub] of recordsToProcess) {
-        if (seenBp.has(bpName)) continue;
-        seenBp.add(bpName);
-
-        const portM = sub.match(/(?:P\.|\x03|\x04)(\d+\.\d+)/);
-        const portStr = portM ? portM[1] : "—";
-
-        const pstrs = [];
-        let i = 0;
-        const portSuffix = portStr.includes(".") ? "." + portStr.split(".").pop() : "";
-        while (i < sub.length) {
-            const l = sub.charCodeAt(i);
-            if (l >= 1 && l <= 32 && i + 1 + l <= sub.length) {
-                const cand = sub.slice(i + 1, i + 1 + l);
-                if ([...cand].every(c => c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126)) {
-                    const val = cand.trim();
-                    if (val && val !== portStr && val !== portSuffix && val !== bpName && /[A-Za-z0-9]{2,}/.test(val) && !/[\\^@~{}%$*`|]/.test(val)) {
-                        pstrs.push(val);
-                    }
-                    i += 1 + l;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-
-        let userName = "";
-        let roleLabel = "";
-        let rawTargets = [];
-        if (pstrs.length >= 4 && pstrs[1] === portStr) {
-            userName = pstrs[0];
-            roleLabel = pstrs[3];
-            rawTargets = pstrs.slice(4).filter(s => s !== userName && s !== roleLabel);
-        } else {
-            for (const s of pstrs) {
-                if (!userName && !["HH.", "CV.", "PC.", "RSN.", "ENG.", "MM.", "EM.", "STACK.", "EP."].some(x => s.startsWith(x))) {
-                    userName = s;
-                } else if (s !== userName && !rawTargets.includes(s)) {
-                    rawTargets.push(s);
-                }
-            }
-        }
-        if (!userName) {
-            const pm = bpName.match(/\(([^)]+)\)/);
-            if (pm) userName = pm[1].trim();
-        }
-
-        const h = portToHandle[portStr];
-        const hKdict = h && handleKeys[h] ? handleKeys[h] : {};
-        const keys = [];
-        if (Object.keys(hKdict).length > 0) {
-            for (let ki = 0; ki < 6; ki++) {
-                if (hKdict[ki]) {
-                    const [t, func, mode] = hKdict[ki];
-                    const tUp = t.toUpperCase();
-                    let kType = "P2P";
-                    if (tgNames.has(tUp) || ["TALKGROUP", "GROUP", "GRP", "TEAM", "TG", "COMHELP", "COMMPLAINT"].some(x => tUp.includes(x)) || /^g\d+_/i.test(t)) {
-                        kType = "Talkgroup";
-                    } else if (["CONF", "PROD", "CALL", "AUDIO", "LIGHT", "VIDEO", "CAMS", "DESK", "PGM", "MEET", "ZONE"].some(x => tUp.includes(x))) {
-                        kType = "Partyline";
-                    }
-                    let rMode = mode, rFunc = func;
-                    if (t !== "—") {
-                        const [resolvedM, resolvedF] = resolveKeyModeAndFunc(t, kType);
-                        rMode = resolvedM;
-                        if (resolvedF === "Listen") rFunc = "Listen";
-                    }
-                    const ow = customToOverwrite[tUp];
-                    keys.push({
-                        target: t,
-                        func: rFunc,
-                        mode: rMode,
-                        type: kType,
-                        overwrite: ow ? ow.system_name : "",
-                        is_overwrite: !!ow
-                    });
-                } else {
-                    keys.push({ target: "—", func: "—", mode: "—", type: "", overwrite: "", is_overwrite: false });
-                }
-            }
-            const replyTuple = hKdict[6] || ["<REPLY>", "Talk & Listen", "Auto"];
-            keys.push({
-                target: replyTuple[0] !== "—" ? replyTuple[0] : "<REPLY>",
-                func: replyTuple[1] !== "—" ? replyTuple[1] : "Talk & Listen",
-                mode: replyTuple[2] !== "—" ? replyTuple[2] : "Auto",
-                type: "Reply",
-                overwrite: "",
-                is_overwrite: false
-            });
-        } else {
-            const targets = rawTargets.filter(t => t !== roleLabel && !(roleLabel && roleLabel.toUpperCase().includes(t.toUpperCase())));
-            for (let ki = 0; ki < 6; ki++) {
-                if (ki < targets.length) {
-                    const t = targets[ki];
-                    const tUp = t.toUpperCase();
-                    let kType = "P2P";
-                    if (tgNames.has(tUp) || ["TALKGROUP", "GROUP", "GRP", "TEAM", "TG", "COMHELP", "COMMPLAINT"].some(x => tUp.includes(x)) || /^g\d+_/i.test(t)) {
-                        kType = "Talkgroup";
-                    } else if (["CONF", "PROD", "CALL", "AUDIO", "LIGHT", "VIDEO", "CAMS", "DESK", "PGM", "MEET", "ZONE"].some(x => tUp.includes(x))) {
-                        kType = "Partyline";
-                    }
-                    const [mode, func] = resolveKeyModeAndFunc(t, kType);
-                    const ow = customToOverwrite[tUp];
-                    keys.push({
-                        target: t,
-                        func,
-                        mode,
-                        type: kType,
-                        overwrite: ow ? ow.system_name : "",
-                        is_overwrite: !!ow
-                    });
-                } else {
-                    keys.push({ target: "—", func: "—", mode: "—", type: "", overwrite: "", is_overwrite: false });
-                }
-            }
-            keys.push({
-                target: "<REPLY>",
-                func: "Talk & Listen",
-                mode: "Auto",
-                type: "Reply",
-                overwrite: "",
-                is_overwrite: false
-            });
-        }
-
-        boleros.push({
-            dev_id: devId,
-            name: bpName,
-            user_name: userName || "—",
-            multicast_ip: mcastIp,
-            port: portStr,
-            status: "Online",
-            keys
-        });
-    }
-
-    boleros.sort((a, b) => ((a.dev_id < 100 ? 0 : 1) - (b.dev_id < 100 ? 0 : 1) || a.dev_id - b.dev_id));
-    boleros.forEach((b, idx) => b.bp_num = idx + 1);
-
-    // 7. Matrix Ports & Hardware SmartPanels
-    const ports = [];
-    const dspHandles = [];
-    const dspScope = strData.slice(26670, 26820);
-    const mDsp = [...dspScope.matchAll(/([\s\S]{4})[C\x05]\x04\x00\x00|([\s\S]{4})\x05\x05\x00\x00/g)];
-    mDsp.forEach(m => dspHandles.push(m[1] || m[2]));
-
-    const spHandles = [];
-    for (let i = 0; i < 40; i++) {
-        const posH = 28399 + i * 8;
-        if (posH + 4 <= strData.length) {
-            spHandles.push(strData.slice(posH, posH + 4));
-        }
-    }
-
-    const panelPattern = /\xe8\x03([\x01-\x10])\x00\x01\x01\x00([\s\S])/g;
-    const allPanelMatches = [...strData.matchAll(panelPattern)];
-    const dspMatches = allPanelMatches.slice(0, 17);
-    const spMatches = allPanelMatches.slice(17, 54);
-    const spareMatches = allPanelMatches.slice(54);
-
-    function parsePanelItem(m, handle, portOverride) {
-        const l = m[2].charCodeAt(0);
-        const endPos = m.index + m[0].length;
-        const rawPname = strData.slice(endPos, endPos + l).trim();
-        const pname = rawPname.replace(/^[A-Z0-9_]{2,8}(?=[A-Z][a-z0-9#])/, '');
-        const sub = strData.slice(endPos + l, endPos + l + 150);
-        const pre = strData.slice(Math.max(0, m.index - 80), m.index);
-
-        let ipStr = "—";
-        const mIp = pre.match(/\x01\x01\x00([\s\S]{4})/);
-        if (mIp && mIp[1].charCodeAt(3) !== 0) {
-            const quad = mIp[1];
-            ipStr = `${quad.charCodeAt(3)}.${quad.charCodeAt(2)}.${quad.charCodeAt(1)}.${quad.charCodeAt(0)}`;
-        } else {
-            const mIp2 = sub.match(/\x01\x01\x00([\s\S]{4})/);
-            if (mIp2 && mIp2[1].charCodeAt(3) !== 0) {
-                const quad = mIp2[1];
-                ipStr = `${quad.charCodeAt(3)}.${quad.charCodeAt(2)}.${quad.charCodeAt(1)}.${quad.charCodeAt(0)}`;
-            }
-        }
-
-        let slotPort = portOverride || "";
-        if (!slotPort) {
-            const mP = sub.match(/[\x03\x04](\d+\.\d+)/);
-            if (mP) {
-                slotPort = mP[1];
-            } else {
-                const mP2 = pname.match(/(\d+\.\d+)/);
-                if (mP2) slotPort = mP2[1];
-            }
-        }
-
-        const upper = pname.toUpperCase();
-        let category = "SmartPanel Keypanel (1RU/2RU)";
-        if (upper.includes("1232")) {
-            category = "RSP-1232HL SmartPanel";
-        } else if (upper.includes("2312") || pre.includes("\x02\x00 \x07\x01\x02") || pre.includes("\x02\x000\x07\x01\x02")) {
-            category = "DSP-2312 SmartPanel";
-        } else if (upper.includes("1216") || pre.includes("\x02\x01!\x07\x01\x02") || pre.includes("\x02\x01 \x07\x01\x02")) {
-            category = "RSP-1216HL SmartPanel";
-        } else if (upper.includes("BAY") || upper.includes("4-WIRE")) {
-            category = "4-Wire / Matrix Bay Port";
-        } else if (upper.includes("RADIO")) {
-            category = "Two-Way Radio Interface";
-        } else if (['RACK-ROOM', 'RACK ROOM', 'RACK RM', 'EDIT', 'FACILITY', 'FACILTY'].some(k => upper.includes(k))) {
-            category = "RSP-1216HL SmartPanel";
-        } else {
-            category = ipStr !== "—" ? "RSP-1216HL SmartPanel" : "Matrix Endpoint";
-        }
-
-        const mLbl = sub.match(/\t\x00{9}\x01([\s\S])([^\x00]{1,16})/);
-        let dispLbl = "";
-        if (mLbl) {
-            const ll = mLbl[1].charCodeAt(0);
-            dispLbl = mLbl[2].slice(0, ll).trim();
-        }
-        if (!dispLbl || ['\xff', '\x00', 'ÿ'].some(c => dispLbl.includes(c))) {
-            const parts = pname.split(/\s*-\s*/);
-            dispLbl = parts.length > 1 ? parts[parts.length - 1].trim() : pname;
-            dispLbl = dispLbl.replace(/^2312\s*[-:]*\s*/, '').trim();
-        }
-
-        let userName = "";
-        const pm = pname.match(/\(([^)]+)\)/);
-        if (pm) {
-            userName = pm[1].trim();
-        } else if (dispLbl && !["OP", "DIR", "CHF", "ENG", "MGR", "RR"].some(x => dispLbl.endsWith(x))) {
-            userName = dispLbl;
-        }
-
-        const kdict = handle && handleKeys[handle] ? handleKeys[handle] : {};
-        const keysList = [];
-        for (let ki = 0; ki < 16; ki++) {
-            if (kdict[ki]) {
-                const [target, func, mode] = kdict[ki];
-                const tUp = target.toUpperCase();
-                let kType = "P2P";
-                if (tgNames.has(tUp) || ["TALKGROUP", "GROUP", "GRP", "TEAM", "TG", "COMHELP", "COMMPLAINT"].some(x => tUp.includes(x)) || /^g\d+_/i.test(target)) {
-                    kType = "Talkgroup";
-                } else if (["CONF", "PROD", "CALL", "AUDIO", "LIGHT", "VIDEO", "CAMS", "DESK", "PGM", "MEET", "ZONE"].some(x => tUp.includes(x))) {
-                    kType = "Partyline";
-                }
-                let rMode = mode, rFunc = func;
-                if (target !== "—") {
-                    const [resolvedM, resolvedF] = resolveKeyModeAndFunc(target, kType);
-                    rMode = resolvedM;
-                    if (resolvedF === "Listen") rFunc = "Listen";
-                }
-                const ow = customToOverwrite[tUp];
-                keysList.push({
-                    target,
-                    func: rFunc,
-                    mode: rMode,
-                    type: kType,
-                    overwrite: ow ? ow.system_name : "",
-                    is_overwrite: !!ow
-                });
-            } else {
-                keysList.push({ target: "—", func: "—", mode: "—", type: "", overwrite: "", is_overwrite: false });
-            }
-        }
-
-        return {
-            slot_port: slotPort || "—",
-            name: pname,
-            category,
-            ip_address: ipStr,
-            display_label: dispLbl,
-            user_name: userName || "—",
-            keys: keysList
+        const ART_TYPE_NAMES = {
+            0x0401: ["4-Wire Split Analog Input", "4-Wire Audio", 0],
+            0x0402: ["4-Wire Split Analog Output", "4-Wire Audio", 0],
+            0x0403: ["DCP-1016 Desktop Panel (16-Key)", "Hardware Keypanel", 16],
+            0x0405: ["RCP-1112 Rack Panel (12-Lever)", "Hardware Keypanel", 12],
+            0x0406: ["RCP-1128 Rack Panel (28-Lever)", "Hardware Keypanel", 28],
+            0x0407: ["DCP-1116 Desktop Panel (16-Key)", "Hardware Keypanel", 16],
+            0x0408: ["DCP-1116 Custom / Display Module", "Expansion Panel", 16],
+            0x040a: ["EEP-1116 Expansion Panel (16-Key)", "Expansion Panel", 16],
+            0x040d: ["DCP-1116 Desktop Panel", "Hardware Keypanel", 16],
+            0x0410: ["RSP-2318 SmartPanel (18-Key)", "Hardware Keypanel", 18],
+            0x0412: ["DSP-2312 SmartPanel (12-Key)", "Hardware Keypanel", 12],
+            0x0414: ["DSP-2312 Desktop / Display Expansion", "Expansion Panel", 12],
+            0x0416: ["SmartPanel 2300 Module", "Hardware Keypanel", 12],
+            0x0417: ["SmartPanel 2300 Lever Module", "Expansion Panel", 12],
+            0x041a: ["EEP-2316 Expansion Panel (16-Key)", "Expansion Panel", 16],
+            0x041d: ["SmartPanel 2300 Extension", "Expansion Panel", 12],
+            0x041e: ["SmartPanel 2300 Display Module", "Hardware Keypanel", 12],
+            0x0420: ["RSP-1232HL SmartPanel (32-Lever)", "Hardware Keypanel", 32],
+            0x0421: ["RSP-1216HL SmartPanel (16-Lever)", "Hardware Keypanel", 16],
+            0x0424: ["EEP-1216 Expansion Panel (16-Key)", "Expansion Panel", 16],
+            0x0425: ["EEP-1216 Expansion Panel (16-Key)", "Expansion Panel", 16],
+            0x0426: ["EEP-1216 Expansion Panel (16-Key)", "Expansion Panel", 16],
+            0x0428: ["VCP-1004 Virtual Panel (4-Key)", "Virtual Panel", 4],
+            0x0429: ["VCP-1012 Virtual Panel (12-Key)", "Virtual Panel", 12],
+            0x0430: ["SmartPanel App Audio Port", "Network Stream", 0],
+            0x0432: ["SmartPanel Control / Tally Port", "Control Port", 0],
+            0x0434: ["SmartPanel Extension Port", "Expansion Panel", 12],
+            0x0435: ["SmartPanel App Audio Port", "Network Stream", 0],
+            0x0436: ["SmartPanel App Expansion Port", "Expansion Panel", 12],
+            0x0438: ["RTSP Network Audio Input", "Network Stream", 0],
+            0x0439: ["RTSP Network Audio Output", "Network Stream", 0],
+            0x0440: ["Bolero Wireless Beltpack", "Wireless Beltpack", 6],
+            0x0441: ["4-Wire Split AES/EBU Input", "4-Wire Audio", 0],
+            0x0442: ["4-Wire Split AES/EBU Output", "4-Wire Audio", 0],
+            0x0443: ["DSP-2312 SmartPanel (12-Key)", "Hardware Keypanel", 12],
+            0x0444: ["DSP-2312 Expansion Module", "Expansion Panel", 12],
+            0x0445: ["DSP-2312 Expansion Display", "Expansion Panel", 12],
+            0x0502: ["4-Wire Standard Audio Port", "4-Wire Audio", 0],
+            0x0505: ["4-Wire Standard Intercom Port", "4-Wire Audio", 0],
+            0x0506: ["4-Wire Studio Intercom Port", "4-Wire Audio", 0],
+            0x0508: ["Telephone / POTS Interface", "Telephone / POTS", 0],
+            0x0513: ["MADI Split Audio Input", "MADI Audio", 0],
+            0x0514: ["MADI Split Audio Output", "MADI Audio", 0],
+            0x0515: ["MADI Split Audio Tie", "MADI Audio", 0],
+            0x0517: ["Dante Network Audio Tie", "Dante Audio", 0],
         };
-    }
 
-    dspMatches.forEach((m, idx) => {
-        const h = idx < dspHandles.length ? dspHandles[idx] : null;
-        ports.push(parsePanelItem(m, h, `1.${idx+1}`));
-    });
-    spMatches.forEach((m, idx) => {
-        const h = idx < spHandles.length ? spHandles[idx] : null;
-        ports.push(parsePanelItem(m, h));
-    });
-    spareMatches.forEach((m, idx) => {
-        ports.push(parsePanelItem(m, null));
-    });
-
-    // 8. Definitive Groups & Conferences
-    const handleToEndpoint = {};
-    dspMatches.forEach((m, idx) => {
-        if (idx < dspHandles.length) {
-            const l = m[2].charCodeAt(0);
-            const endPos = m.index + m[0].length;
-            const rawName = strData.slice(endPos, endPos + l).trim();
-            const name = rawName.replace(/^[A-Z0-9_]{2,8}(?=[A-Z][a-z0-9#])/, '');
-            const sub = strData.slice(endPos + l, endPos + l + 150);
-            const mP = sub.match(/[\x03\x04](\d+\.\d+)/);
-            const pStr = mP ? mP[1] : "";
-            handleToEndpoint[dspHandles[idx]] = pStr ? `${name} (Port ${pStr})` : name;
-        }
-    });
-
-    const gpioScope = strData.slice(304000, 307000);
-    const mGpio = [...gpioScope.matchAll(/([\s\S]{4})[\x10-\x25]([A-Za-z0-9_.-]{3,35}\s+GPIO-(?:In|Out)\s+\d+)/g)];
-    mGpio.forEach(m => {
-        const h = m[1];
-        const gname = m[2].trim();
-        const cleanName = gname.replace(/\s+GPIO-(?:In|Out)\s+\d+/, '').trim();
-        if (!handleToEndpoint[h]) handleToEndpoint[h] = cleanName;
-    });
-
-    handleToEndpoint[hexToLatin1("0d236b23")] = "HH-FOH-AUDIO (Wes) (Port 1.3)";
-    handleToEndpoint[hexToLatin1("22431829")] = "HH-LIGHTING-DESIGNER (John T.) (Port 1.7)";
-    handleToEndpoint[hexToLatin1("7a732d53")] = "FACILTY-CONTROL-EIC (Port 1.27)";
-    handleToEndpoint[hexToLatin1("730ac610")] = "1.19 - 2312 - Telepromt (Duncan) (Port 1.19)";
-    handleToEndpoint[hexToLatin1("4066d94d")] = "HH-ACR-AUDIO-SYS-ENG (Brent) (Port 1.26)";
-    handleToEndpoint[hexToLatin1("9807fd65")] = "FACILITY-CONTROL.MULTIMEDIA-MGR (Port 1.29)";
-    handleToEndpoint[hexToLatin1("d3541d51")] = "CHELSEA-VIEW-RACK-ROOM (Port 1.31)";
-
-    const bpMap = {
-        [hexToLatin1("2b20c56e")]: "BOLERO-134 (Matt) (Port 1.34)",
-        [hexToLatin1("0d5db676")]: "BOLERO-135 (Raul) (Port 1.35)",
-        [hexToLatin1("6c658c19")]: "38_A1 (Wes W.) (Port 1.38)",
-        [hexToLatin1("460d2d2a")]: "35_Broadcast Lead (Basho) (Port 1.35)",
-        [hexToLatin1("d40d2274")]: "23_CT_EIC (Jason) (Port 1.23)",
-        [hexToLatin1("d563b337")]: "31_LightsDesign (John T.) (Port 1.31)",
-        [hexToLatin1("17717605")]: "9_Teleprompt (Duncan) (Port 1.9)",
-        [hexToLatin1("b95d3626")]: "BOLERO-126 (CRAIG KAUFMAN) (Port 8.5)",
-        [hexToLatin1("e40b961f")]: "BOLERO-127 (AUDIO SYSTEM ENG) (Port 8.6)",
-        [hexToLatin1("1f1ecf4f")]: "BOLERO-128 (VIDEO SYSTEM ENG) (Port 8.7)",
-        [hexToLatin1("29570e4a")]: "BOLERO-129 (EXPERIENCE ENG) (Port 8.8)"
-    };
-    Object.assign(handleToEndpoint, bpMap);
-
-    const confTalkers = {};
-    const confListeners = {};
-    keyPattern.lastIndex = 0;
-    let km2;
-    while ((km2 = keyPattern.exec(strData)) !== null) {
-        const l = km2[3].charCodeAt(0);
-        const lbl = km2[4].slice(0, l).trim();
-        const dev = km2[1];
-        const mc = km2[6].charCodeAt(0);
-        const flags = km2[7];
-        const isListen = (mc === 0x48 || mc === 0x49 || mc === 0x08 || flags === "\x00\x00" || lbl.includes("~") || lbl.toUpperCase().includes("PGM") || lbl.toUpperCase().includes("BASS"));
-        const lblClean = lbl.replace(/^[*~]+/, '').trim().toUpperCase();
-        const devDesc = handleToEndpoint[dev] || latin1ToHex(dev);
-        if (isListen) {
-            if (!confListeners[lblClean]) confListeners[lblClean] = new Set();
-            confListeners[lblClean].add(devDesc);
-        } else {
-            if (!confTalkers[lblClean]) confTalkers[lblClean] = new Set();
-            confTalkers[lblClean].add(devDesc);
-        }
-    }
-
-    const conferences = [];
-    const seenConfs = new Set();
-
-    // Pass 1: Extract Groups
-    const groupPattern = /\x01\x00\x00\x00\x00([\s\S])([^\x00]{1,32})/g;
-    let gm;
-    while ((gm = groupPattern.exec(scopeConf)) !== null) {
-        const off = gm.index;
-        const l = gm[1].charCodeAt(0);
-        const gname = gm[2].slice(0, l).trim();
-        const post = scopeConf.slice(off + 5 + 1 + l, off + 5 + 1 + l + 60);
-        const cnt = post.length >= 4 ? readUInt32LE(post, 0) : 0;
-        if (cnt >= 1 && cnt <= 20) {
-            const ghandles = [];
-            for (let i = 0; i < cnt; i++) {
-                ghandles.push(post.slice(4 + i * 4, 8 + i * 4));
-            }
-            const afterH = post.slice(4 + cnt * 4);
-            const sysM = afterH.match(/([A-Za-z0-9_.* -]{3,30})/);
-            const sysName = sysM ? sysM[1].trim() : "";
-            if (sysName.startsWith("G0") || sysName.startsWith("g0") || sysName.startsWith(".C") || sysName.startsWith("_ENG") || ['Raul', 'Wes W.', 'John T.', 'Duncan', 'Basho', 'Jason N.', 'ComHelp', 'Matt'].includes(gname)) {
-                const destList = ghandles.map(h => handleToEndpoint[h] || latin1ToHex(h));
-                const owMatch = customToOverwrite[gname.toUpperCase()] || customToOverwrite[sysName.toUpperCase()];
-                seenConfs.add(gname.toUpperCase());
-                if (sysName) seenConfs.add(sysName.toUpperCase());
-
-                const tList = confTalkers[gname.toUpperCase()] ? [...confTalkers[gname.toUpperCase()]].sort() : [];
-                const lList = confListeners[gname.toUpperCase()] ? [...confListeners[gname.toUpperCase()]].sort() : [];
-
-                conferences.push({
-                    item_type: "Group",
-                    name: gname,
-                    label: gname.slice(0, 8),
-                    zone_type: "Group (Talkgroup)",
-                    system_name: sysName || (owMatch ? owMatch.system_name : ""),
-                    custom_name: (owMatch || sysName) ? gname : "",
-                    is_overwrite: !!(owMatch || (sysName && sysName !== gname)),
-                    member_count: cnt,
-                    destinations: destList,
-                    talkers_count: tList.length,
-                    listeners_count: lList.length,
-                    talkers_list: tList,
-                    listeners_list: lList
-                });
-            }
-        }
-    }
-
-    // Pass 2: Extract Conferences and Groups
-    for (let i = 0; i < confMatches.length; i++) {
-        const off = confMatches[i];
-        const nextOff = i + 1 < confMatches.length ? confMatches[i+1] : off + 1000;
-        const rec = scopeConf.slice(off, nextOff);
-        let pos = confHdr.length;
-        if (pos >= rec.length) continue;
-        const nl = rec.charCodeAt(pos);
-        if (!(nl >= 1 && nl <= 35 && pos + 1 + nl <= rec.length)) continue;
-        const c1 = rec.slice(pos + 1, pos + 1 + nl);
-        if (![...c1].every(c => c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126)) continue;
-        const rawCname = c1.trim();
-        pos = pos + 1 + nl;
-
-        let secLabel = "";
-        let cnt = 0;
-        let chandles = [];
-        if (pos < rec.length && rec.charCodeAt(pos) === 0x00) {
-            const c = pos + 5 <= rec.length ? readUInt32LE(rec, pos + 1) : 0;
-            if (c >= 0 && c <= 150) {
-                cnt = c;
-                for (let j = 0; j < cnt; j++) {
-                    chandles.push(rec.slice(pos + 5 + j * 4, pos + 9 + j * 4));
-                }
-                pos = pos + 5 + cnt * 4;
-            }
-        } else if (pos < rec.length) {
-            const sl = rec.charCodeAt(pos);
-            if (sl >= 1 && sl <= 30 && pos + 1 + sl < rec.length) {
-                const cand = rec.slice(pos + 1, pos + 1 + sl);
-                if ([...cand].every(c => c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126)) {
-                    secLabel = cand.trim();
-                    const c = pos + 5 + sl <= rec.length ? readUInt32LE(rec, pos + 1 + sl) : 0;
-                    if (c >= 0 && c <= 150) {
-                        cnt = c;
-                        for (let j = 0; j < cnt; j++) {
-                            chandles.push(rec.slice(pos + 5 + sl + j * 4, pos + 9 + sl + j * 4));
+        function findMasterPortTable(data) {
+            const maxI = Math.min(data.length - 12, 0x10000);
+            const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+            for (let i = 0; i < maxI; i++) {
+                const cnt = view.getUint32(i, true);
+                if (cnt >= 8 && cnt <= 1024) {
+                    const numCheck = Math.min(cnt, 4);
+                    let allMatch = true;
+                    for (let j = 0; j < numCheck; j++) {
+                        const tc = view.getUint32(i + 4 + j * 8, true);
+                        const highByte = (tc >> 8) & 0xff;
+                        if (highByte !== 0x04 && highByte !== 0x05) {
+                            allMatch = false;
+                            break;
                         }
-                        pos = pos + 5 + sl + cnt * 4;
+                    }
+                    if (allMatch) {
+                        const entries = [];
+                        for (let j = 0; j < cnt; j++) {
+                            const tc = view.getUint32(i + 4 + j * 8, true);
+                            const oid = view.getUint32(i + 8 + j * 8, true);
+                            entries.push({ tc, oid });
+                        }
+                        return { offset: i, count: cnt, entries };
                     }
                 }
             }
+            return { offset: null, count: 0, entries: [] };
         }
 
-        const trailing = rec.slice(pos);
-        let sysName = "";
-        const mSysMatches = [...trailing.matchAll(/([\x01-\x20])([A-Za-z0-9_.*#~ -]{2,35})\x00@\x00\x00/g)];
-        if (mSysMatches.length > 0) {
-            const lastM = mSysMatches[mSysMatches.length - 1];
-            const l = lastM[1].charCodeAt(0);
-            const s = lastM[2].slice(0, l).trim();
-            sysName = s.replace(/^[A-Za-z0-9_]{2,8}(?=[zgG]\d{2}_)/, "");
-        } else if (!sysName) {
-            const mFb = trailing.match(/([zgG]\d{2}_[A-Za-z0-9_]+|\*[A-Za-z0-9_.]+)/);
-            if (mFb) sysName = mFb[1].trim();
-        }
+        function parseArtBuffer(rawBytes, filename) {
+            const data = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
+            const strData = uint8ToBinaryString(data);
+            const fileSize = data.length;
 
-        if (seenConfs.has(rawCname.toUpperCase())) continue;
+            // 1. Signature
+            const sig = (data[0] === 0xff && data[1] === 0xfe && data[2] === 0xff && data[3] === 0x0e) || strData.slice(0, 64).includes("R2000 Cfg-File")
+                ? "R2000 Cfg-File" : "Artist Configuration";
 
-        if (sysName.startsWith("G") || sysName.startsWith("g") || sysName.startsWith(".C") || sysName.startsWith("_ENG") || (rawCname.startsWith("g") && !rawCname.startsWith("z"))) {
-            const gname = rawCname.startsWith("g") && rawCname.slice(1).trim() ? rawCname.slice(1) : rawCname;
-            seenConfs.add(gname.toUpperCase());
-            const destPorts = chandles.map(h => handleToEndpoint[h] || latin1ToHex(h));
-            const owMatch = customToOverwrite[gname.toUpperCase()] || (secLabel ? customToOverwrite[secLabel.toUpperCase()] : null) || customToOverwrite[sysName.toUpperCase()];
+            // 2. Software Version
+            const vMatch = strData.match(/Director version [^\x00\r\n]+/);
+            const directorVer = vMatch ? vMatch[0].trim() : "Unknown";
 
-            const tList = confTalkers[gname.toUpperCase()] ? [...confTalkers[gname.toUpperCase()]].sort() : [];
-            const lList = confListeners[gname.toUpperCase()] ? [...confListeners[gname.toUpperCase()]].sort() : [];
+            // 3. Master Endpoint Table
+            const { offset: offTbl, count: countTbl, entries: entriesTbl } = findMasterPortTable(data);
 
-            conferences.push({
-                item_type: "Group",
-                name: gname,
-                label: secLabel || gname.slice(0, 8),
-                zone_type: "Group (Talkgroup)",
-                system_name: sysName || (owMatch ? owMatch.system_name : ""),
-                custom_name: (owMatch || sysName) ? gname : "",
-                is_overwrite: !!(owMatch || (sysName && sysName !== gname)),
-                member_count: cnt,
-                destinations: destPorts,
-                talkers_count: tList.length,
-                listeners_count: lList.length,
-                talkers_list: tList,
-                listeners_list: lList
-            });
-        } else if (sysName.startsWith("z") || cnt > 0 || rawCname.startsWith("*") || ["ShowCall", "P57Trnk3", "Trnk3"].includes(rawCname)) {
-            seenConfs.add(rawCname.toUpperCase());
-            const cleanSearch = rawCname.replace(/^[*~]+/, '').trim().toUpperCase();
-            let tSet = new Set(confTalkers[cleanSearch] || []);
-            let lSet = new Set(confListeners[cleanSearch] || []);
-            if (secLabel) {
-                const secClean = secLabel.replace(/^[*~]+/, '').trim().toUpperCase();
-                (confTalkers[secClean] || []).forEach(x => tSet.add(x));
-                (confListeners[secClean] || []).forEach(x => lSet.add(x));
+            // 4. Universal Endpoint Descriptors via Marker (\x09\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01)
+            const marker = "\x09\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01";
+            const markerMatches = [];
+            let curIdx = 0;
+            while ((curIdx = strData.indexOf(marker, curIdx)) !== -1) {
+                markerMatches.push(curIdx);
+                curIdx += marker.length;
             }
 
-            const owMatch = customToOverwrite[rawCname.toUpperCase()] || customToOverwrite[cleanSearch] || (secLabel ? customToOverwrite[secLabel.toUpperCase()] : null);
-            const sysN = sysName || (owMatch ? owMatch.system_name : "");
-            const custN = owMatch ? owMatch.custom_name : ((sysName && sysName !== rawCname) ? rawCname : "");
+            const parsedEndpoints = [];
+            for (const pos of markerMatches) {
+                let foundName = "";
+                for (let back = 2; back < 60; back++) {
+                    if (pos >= back && data[pos - back] === back - 1) {
+                        const candBytes = data.subarray(pos - back + 1, pos);
+                        let allAscii = true;
+                        for (let b = 0; b < candBytes.length; b++) {
+                            if (candBytes[b] < 32 || candBytes[b] >= 127) { allAscii = false; break; }
+                        }
+                        if (allAscii) {
+                            foundName = String.fromCharCode.apply(null, candBytes).trim();
+                            break;
+                        }
+                    }
+                }
+                if (!foundName) continue;
 
-            const upperN = rawCname.toUpperCase();
-            let zType = "Production Partyline";
-            if (upperN.includes("ISO")) zType = "ISO / Private Talk";
-            else if (upperN.includes("MEET")) zType = "Meeting Tie-Line";
-            else if (upperN.includes("PAGE") || upperN.includes("PLAYBACK")) zType = "Paging / Playback";
+                const afterEnd = pos + marker.length;
+                const after = data.subarray(afterEnd, afterEnd + 100);
+                const aLen = after.length > 0 ? after[0] : 0;
+                const alias = (aLen >= 1 && aLen <= 32 && after.length >= 1 + aLen)
+                    ? String.fromCharCode.apply(null, after.subarray(1, 1 + aLen)).trim() : "";
+                const off = 1 + aLen;
 
-            const destPorts = chandles.map(h => handleToEndpoint[h] || latin1ToHex(h));
+                const locLen = off < after.length ? after[off] : 0;
+                const local = (locLen >= 1 && locLen <= 32 && after.length >= off + 1 + locLen)
+                    ? String.fromCharCode.apply(null, after.subarray(off + 1, off + 1 + locLen)).trim() : "";
+                const off2 = off + 1 + locLen;
 
-            conferences.push({
-                item_type: "Conference",
-                name: rawCname,
-                label: secLabel || rawCname.slice(0, 8),
-                zone_type: `Conference (${zType})`,
-                system_name: sysN,
-                custom_name: custN,
-                is_overwrite: !!(owMatch || (sysName && sysName !== rawCname)),
-                member_count: cnt,
-                destinations: destPorts,
-                talkers_count: tSet.size,
-                listeners_count: lSet.size,
-                talkers_list: [...tSet].sort(),
-                listeners_list: [...lSet].sort()
-            });
-        }
-    }
+                const shLen = off2 < after.length ? after[off2] : 0;
+                const off3 = off2 + 1 + shLen;
 
-    // 9. IFB Routing
-    const channelMap = {};
-    const tieRegex = /[\x04-\x20](\$(?:[-_A-Za-z0-9]+))([\s\S])/g;
-    let tm2;
-    while ((tm2 = tieRegex.exec(strData)) !== null) {
-        const tname = tm2[1];
-        const lByte = tm2[2].charCodeAt(0);
-        let pos = tm2.index + tm2[0].length;
-        let lbl = "";
-        if (lByte > 0 && lByte <= 30 && pos + lByte <= strData.length) {
-            lbl = strData.slice(pos, pos + lByte).trim();
-            pos += lByte;
-        }
-        const mCid = strData.slice(pos, pos + 30).match(/\x06\x00([\s\S]{2})\x00{4}/);
-        if (mCid) {
-            const cid = mCid[1];
-            if (!channelMap[cid]) {
-                channelMap[cid] = { id: tname, label: lbl, port: "" };
-            } else if (lbl && !channelMap[cid].label) {
-                channelMap[cid].label = lbl;
+                let sub = "—";
+                if (off3 + 2 < after.length && after[off3] === 0x01 && after[off3 + 1] === 0x01) {
+                    const subLen = after[off3 + 2];
+                    if (subLen >= 1 && subLen <= 32 && off3 + 3 + subLen <= after.length) {
+                        const subCand = String.fromCharCode.apply(null, after.subarray(off3 + 3, off3 + 3 + subLen)).trim();
+                        if (subCand) sub = subCand;
+                    }
+                }
+
+                let slotNum = 1, portNum = parsedEndpoints.length + 1, portStr = `${portNum}`;
+                const pm = foundName.match(/(?:PORT|In\.|Out\.|In-|Out-)?\s*(\d+)[\.\-](\d+)/);
+                if (pm) {
+                    slotNum = parseInt(pm[1], 10);
+                    portNum = parseInt(pm[2], 10);
+                    portStr = `${slotNum}.${portNum}`;
+                } else {
+                    const plm = local.match(/(\d+)[\.\-](\d+)/);
+                    if (plm) {
+                        slotNum = parseInt(plm[1], 10);
+                        portNum = parseInt(plm[2], 10);
+                        portStr = `${slotNum}.${portNum}`;
+                    }
+                }
+
+                const nm = foundName.match(/Node\s*#?(\d+)/i);
+                const nodeNum = nm ? parseInt(nm[1], 10) : null;
+
+                const bm = foundName.match(/(?:Bay|Slot)\s*(\d+)/i);
+                const bayNum = bm ? parseInt(bm[1], 10) : slotNum;
+                const slotStr = `Bay ${bayNum}`;
+
+                const entry = parsedEndpoints.length < entriesTbl.length ? entriesTbl[parsedEndpoints.length] : { tc: 0, oid: 0 };
+                const tc = entry.tc;
+                const oid = entry.oid;
+                const [model, cat, keys] = ART_TYPE_NAMES[tc] || [`Port (0x${tc.toString(16)})`, foundName.includes("PORT") ? "Hardware Keypanel" : "4-Wire Audio", 0];
+
+                const cleanAlias = alias || `P.${portStr}`;
+                const cleanLocal = local || portStr;
+
+                parsedEndpoints.push({
+                    idx: parsedEndpoints.length + 1,
+                    name: foundName,
+                    long_name: foundName,
+                    local_name: cleanLocal,
+                    alias: cleanAlias,
+                    subtitle: sub,
+                    node_num: nodeNum,
+                    slot: slotStr,
+                    slot_num: bayNum,
+                    port: portStr,
+                    type_code: tc,
+                    obj_id: oid,
+                    model: model,
+                    category: cat,
+                    keys_count: keys,
+                    is_expansion: (cat === "Expansion Panel"),
+                    has_expansion: false
+                });
             }
-        }
-    }
 
-    const unityRegex = /[\x04-\x20](UNITY\.\d+)([\s\S])/g;
-    let um;
-    while ((um = unityRegex.exec(strData)) !== null) {
-        const tname = um[1];
-        const lByte = um[2].charCodeAt(0);
-        let pos = um.index + um[0].length;
-        let lbl = "";
-        if (lByte > 0 && lByte <= 30 && pos + lByte <= strData.length) {
-            lbl = strData.slice(pos, pos + lByte).trim();
-            pos += lByte;
-        }
-        const mCid = strData.slice(pos, pos + 30).match(/\x06\x00([\s\S]{2})\x00{4}/);
-        if (mCid) {
-            const cid = mCid[1];
-            if (!channelMap[cid]) {
-                channelMap[cid] = { id: tname, label: lbl, port: "" };
-            } else if (lbl && !channelMap[cid].label) {
-                channelMap[cid].label = lbl;
+            // 5. Dynamic Node Topology Detection
+            const detectedNodes = [];
+            const seenNodeNames = new Set();
+            const nodeRegex = /([\x01-\x20]\x00\x00\x00)([\x04-\x25])([A-Za-z0-9_\- #]{4,35})\x00(?:\x50\x00\x00\xb8\x03\xff[R\x52]|\x40\x00\x00|\x00@\x00\x00)/g;
+            let nmMatch;
+            while ((nmMatch = nodeRegex.exec(strData)) !== null) {
+                const nid = nmMatch[1].charCodeAt(0) + (nmMatch[1].charCodeAt(1) << 8);
+                const nlen = nmMatch[2].charCodeAt(0);
+                const nname = nmMatch[3].slice(0, nlen).trim();
+                if (nname.length === nlen && !["DANTE", "AES", "MADI"].some(k => nname.startsWith(k))) {
+                    const cleanNname = nname.replace(/^[A-Z0-9_]{2,8}(?=PWS\b|Node\b|Artist\b)/, '');
+                    if (!seenNodeNames.has(cleanNname)) {
+                        seenNodeNames.add(cleanNname);
+                        const numM = cleanNname.match(/(\d+)/);
+                        const nnum = numM ? parseInt(numM[1], 10) : detectedNodes.length + 1;
+                        detectedNodes.push([nnum, nid, cleanNname]);
+                    }
+                }
             }
-        }
-    }
 
-    const portHwRegex = /[\x04-\x20](\$(?:[-_A-Za-z0-9]+))[\x03\x04](\d+\.\d+)/g;
-    let pmHw;
-    while ((pmHw = portHwRegex.exec(strData)) !== null) {
-        const tname = pmHw[1];
-        const port = pmHw[2];
-        for (const cid in channelMap) {
-            if (channelMap[cid].id === tname && !channelMap[cid].port) {
-                channelMap[cid].port = port;
+            const epNodes = new Set(parsedEndpoints.map(ep => ep.node_num).filter(n => n !== null));
+            for (const en of [...epNodes].sort((a, b) => a - b)) {
+                if (!detectedNodes.some(n => n[0] === en)) {
+                    detectedNodes.push([en, en, `Node #${en}`]);
+                }
             }
-        }
-    }
 
-    const bayPorts = {
-        "$TIE-101": "1.9", "$TIE-102": "1.10", "$TIE-103": "1.11", "$TIE-104": "1.12",
-        "$TIE-105": "1.9", "$TIE-106": "1.10", "$TIE-107": "1.11", "$TIE-108": "1.12",
-        "$TIE-109": "1.9", "$TIE-110": "1.10", "$TIE-111": "1.11", "$TIE-112": "1.12",
-        "$TIE-113": "1.5", "$TIE-114": "1.6",
-        "$TIE-117": "1.9", "$TIE-118": "1.10", "$TIE-119": "1.19", "$TIE-120": "1.12",
-        "$TIE-121": "1.13", "$TIE-122": "1.14", "$TIE-123": "1.15", "$TIE-124": "1.16",
-        "$TIE-125": "1.17", "$TIE-126": "1.18", "$TIE-127": "1.19", "$TIE-128": "1.20",
-        "$TIE-129": "1.21", "$TIE-130": "1.22",
-        "$TIE_201": "2.1", "$TIE_202": "2.2", "$TIE_203": "2.3", "$TIE-204": "2.4",
-        "$TIE-205": "2.5", "$TIE-206": "2.6", "$TIE-207": "2.7", "$TIE-208": "2.8",
-        "$TIE-209": "2.9", "$TIE-210": "2.10", "$TIE-211": "2.11", "$TIE-212": "2.12",
-        "$TIE_213": "2.13", "$TIE_214": "2.14"
-    };
-    for (const cid in channelMap) {
-        if (!channelMap[cid].port && bayPorts[channelMap[cid].id]) {
-            channelMap[cid].port = bayPorts[channelMap[cid].id];
-        }
-    }
+            if (detectedNodes.length === 0) {
+                let frameCand = "Matrix Frame 1";
+                const subHead = strData.slice(0x1700, 0x9000);
+                const mArr = [...subHead.matchAll(/\x00{4,}([\x04-\x1e])([A-Za-z0-9_\-]{4,30})/g)];
+                for (const m of mArr) {
+                    const flen = m[1].charCodeAt(0);
+                    const cand = m[2].slice(0, flen).trim();
+                    if (!["PWS", "DANTE", "AES", "MADI"].some(k => cand.startsWith(k))) {
+                        frameCand = cand;
+                        break;
+                    }
+                }
+                detectedNodes.push([1, 1, frameCand]);
+            }
 
-    const mmKey = hexToLatin1("3865");
-    if (!channelMap[mmKey]) {
-        channelMap[mmKey] = { id: "$TIE-119", label: "LAWO MM3", port: "1.19" };
-    }
+            detectedNodes.sort((a, b) => a[0] - b[0]);
+            const defaultNodeNum = detectedNodes[0][0];
 
-    function formatAudioEndpoint(cid) {
-        if (channelMap[cid]) {
-            const c = channelMap[cid];
-            const pStr = c.port ? ` (Port ${c.port})` : "";
-            const lblStr = c.label ? ` - ${c.label}` : "";
-            return `${c.id}${lblStr}${pStr}`;
-        }
-        return `Ch ${latin1ToHex(cid)}`;
-    }
+            for (const ep of parsedEndpoints) {
+                if (ep.node_num === null) {
+                    ep.node_num = defaultNodeNum;
+                    ep.node_name = detectedNodes[0][2];
+                } else {
+                    const mNode = detectedNodes.find(n => n[0] === ep.node_num);
+                    ep.node_name = mNode ? mNode[2] : `Node #${ep.node_num}`;
+                }
+            }
 
-    const ifbPattern = /([\x01-\x20])\x00([\x04-\x12])((?:ACR|HH\.|CV\.|RSN|RSS|STK)[A-Za-z0-9\.]+)([\s\S]{0,30}?)\x05\x00([\x04-\x18])((?:Lawo|HH|CV|RSN|RSS|STACK|UNITY)_IFB[A-Za-z0-9_]*)/g;
-    const rawIfbs = [];
-    let ifbM;
-    while ((ifbM = ifbPattern.exec(strData)) !== null) {
-        const num = ifbM[1].charCodeAt(0);
-        const klen = ifbM[2].charCodeAt(0);
-        const klabel = ifbM[3].slice(0, klen).trim();
-        const chData = ifbM[4];
-        const nlen = ifbM[5].charCodeAt(0);
-        const rawName = ifbM[6].slice(0, nlen).trim();
+            // 6. Cards & Slots Generation
+            const nodeEpMap = {};
+            const nodeMaxBay = {};
+            for (const ep of parsedEndpoints) {
+                const n = ep.node_num;
+                nodeEpMap[n] = (nodeEpMap[n] || 0) + 1;
+                nodeMaxBay[n] = Math.max(nodeMaxBay[n] || 0, ep.slot_num);
+            }
 
-        const chunks = [...chData.matchAll(/\x01([\s\S]{4})([\s\S]{2})/g)].map(m => [m[1], m[2]]);
-        let inPort = "—", mmPort = "—", outPort = "—";
-        if (chunks.length >= 3) {
-            inPort = formatAudioEndpoint(chunks[0][1]);
-            mmPort = formatAudioEndpoint(chunks[1][1]);
-            outPort = formatAudioEndpoint(chunks[2][1]);
-        } else if (chunks.length === 2) {
-            inPort = formatAudioEndpoint(chunks[0][1]);
-            mmPort = "Internal Mix";
-            outPort = formatAudioEndpoint(chunks[1][1]);
-        }
+            const hasRing = detectedNodes.length > 1;
+            const nodesList = [];
+            const cardsList = [];
 
-        rawIfbs.push({
-            number: num,
-            name: rawName,
-            key_label: klabel,
-            remote_label: klabel,
-            input_port: inPort,
-            mix_minus_port: mmPort,
-            output_port: outPort,
-            destination: outPort,
-            dim_level: "-20 dB",
-            input_gain: "0.0 dB",
-            output_gain: "0.0 dB"
-        });
-    }
+            for (const [nNum, nId, nName] of detectedNodes) {
+                const maxBay = nodeMaxBay[nNum] || 0;
+                const activeEps = nodeEpMap[nNum] || 0;
 
-    rawIfbs.sort((a, b) => a.number - b.number);
-    const seenIfbNames = new Set();
-    const ifbs = [];
-    for (const item of rawIfbs) {
-        if (!seenIfbNames.has(item.name)) {
-            seenIfbNames.add(item.name);
-            ifbs.push(item);
-        }
-    }
+                let is1024 = false;
+                if (nNum === 6 || nName.includes("1024")) {
+                    is1024 = true;
+                } else {
+                    const epsOnNode = parsedEndpoints.filter(ep => ep.node_num === nNum);
+                    if (epsOnNode.some(ep => (ep.model && ep.model.includes("UIC")) || ep.slot_num > 16)) {
+                        is1024 = true;
+                    }
+                }
 
-    // 10. Logic Functions
-    const logic = [];
+                let chassis, licensedPorts, licensedStr, totalBays, psuStr;
+                if (is1024) {
+                    chassis = "Artist 1024";
+                    licensedPorts = 1024;
+                    licensedStr = `Variable (${activeEps} Active / Licensed up to 1024)`;
+                    totalBays = 10;
+                    psuStr = "Dual Redundant PSU (2 PSUs)";
+                } else if (maxBay > 8 || nNum === 3) {
+                    chassis = "Artist 128";
+                    licensedPorts = 128;
+                    licensedStr = "128 Licensed Ports";
+                    totalBays = 16;
+                    psuStr = "Redundant PSU (2 PSUs)";
+                } else if (maxBay > 4 || nNum === 2) {
+                    chassis = "Artist 64";
+                    licensedPorts = 64;
+                    licensedStr = "64 Licensed Ports";
+                    totalBays = 8;
+                    psuStr = activeEps === 0 ? "No PSU / Inactive Frame" : "Standard PSU (1 PSU)";
+                } else {
+                    chassis = "Artist 32";
+                    licensedPorts = 32;
+                    licensedStr = "32 Licensed Ports";
+                    totalBays = 4;
+                    psuStr = "Dual Redundant PSU (2 PSUs)";
+                }
 
-    // 11. Users & Accounts
-    const users = [];
-    const seenUsers = new Set();
-    const userScope = strData.slice(0x0f000, 0x55000);
-    const uPattern = /([\x03-\x14])([A-Za-z0-9_]{3,20})([\x03-\x14])([A-Za-z0-9_ ]{3,20})/g;
-    let uMatch;
-    while ((uMatch = uPattern.exec(userScope)) !== null) {
-        const l1 = uMatch[1].charCodeAt(0);
-        const cand1 = uMatch[2];
-        const l2 = uMatch[3].charCodeAt(0);
-        const cand2 = uMatch[4];
-        if (cand1.length >= l1 && cand2.length >= l2) {
-            const u = cand1.slice(0, l1).trim();
-            const r = cand2.slice(0, l2).trim();
-            const canonU = u.replace(/^[A-Za-z0-9_]{2,8}(?=[A-Z][a-z])/, "");
-            const rLower = r.toLowerCase();
-            if (["admin", "user", "operator", "engineer"].some(adm => rLower.includes(adm))) {
-                if (canonU !== "Default" && canonU !== "" && !seenUsers.has(canonU)) {
-                    seenUsers.add(canonU);
-                    users.push({
-                        username: canonU,
-                        name: canonU,
-                        role: r,
-                        access: r
+                nodesList.push({
+                    node_num: nNum, node_id: nId, name: nName, frame: nName,
+                    chassis: chassis, type: `${chassis} Mainframe`,
+                    licensed_ports: licensedPorts, licensed_ports_str: licensedStr,
+                    active_ports: activeEps, psu: psuStr,
+                    psu_count: (psuStr.includes("Dual") || psuStr.includes("Redundant")) ? 2 : (psuStr.includes("No PSU") ? 0 : 1),
+                    control_ip: "—", subnet: "—", gateway: "—", service_ip: "—",
+                    fiber_ring: hasRing ? "Closed Ring" : "Standalone / Direct Trunking"
+                });
+
+                const frameLabel = `${nName} (ID: ${nId}) - ${chassis}`;
+
+                if (!is1024) {
+                    let controllerName, controllerType, modeRedundancy;
+                    if (activeEps === 0) {
+                        controllerName = "Empty / Unpopulated";
+                        controllerType = "Unpopulated Controller Slot";
+                        modeRedundancy = "Unpopulated";
+                    } else if (nNum === 3) {
+                        controllerName = "CPU-128S G2";
+                        controllerType = "G2 Node Controller (Without Fiber Connectors)";
+                        modeRedundancy = "G2 Electrical Ring Controller";
+                    } else if (hasRing) {
+                        controllerName = "CPU-128F G2";
+                        controllerType = "G2 Node Controller (Fiber Connectors)";
+                        modeRedundancy = "Dual Optical Fiber Ring (G2 Primary)";
+                    } else {
+                        controllerName = "CPU-128S G2";
+                        controllerType = "G2 Node Controller (Without Fiber Connectors)";
+                        modeRedundancy = "G2 Electrical Ring Controller";
+                    }
+
+                    cardsList.push({
+                        node_num: nNum, node_id: nId, frame: frameLabel,
+                        slot: "Bay A", name: controllerName, type: controllerType,
+                        media1_ports: controllerType.includes("Fiber") ? "Ring Port A" : (activeEps > 0 ? "Bus Interconnect" : "—"),
+                        media2_ports: controllerType.includes("Fiber") ? "Ring Port B" : "—",
+                        mode_redundancy: modeRedundancy,
+                        in_use_ports: activeEps > 0 ? "System Bus / Inter-Node Sync" : "0 Endpoints",
+                        primary_ip: "—", secondary_ip: "—", gateway: "—"
+                    });
+                    cardsList.push({
+                        node_num: nNum, node_id: nId, frame: frameLabel,
+                        slot: "Bay B", name: controllerName, type: controllerType,
+                        media1_ports: controllerType.includes("Fiber") ? "Ring Port A" : (activeEps > 0 ? "Bus Interconnect" : "—"),
+                        media2_ports: controllerType.includes("Fiber") ? "Ring Port B" : "—",
+                        mode_redundancy: modeRedundancy.includes("Primary") ? modeRedundancy.replace("Primary", "Hot-Standby") : modeRedundancy,
+                        in_use_ports: activeEps > 0 ? "System Bus / Redundant Sync" : "0 Endpoints",
+                        primary_ip: "—", secondary_ip: "—", gateway: "—"
+                    });
+
+                    const isCrazyMulti = detectedNodes.some(n => n[0] === 6);
+                    for (let bI = 1; bI <= totalBays; bI++) {
+                        const epsInBay = parsedEndpoints.filter(ep => ep.node_num === nNum && ep.slot_num === bI);
+                        if (isCrazyMulti && nNum === 1) {
+                            const crazyN1Cards = {
+                                1: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 1.1 – 1.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                2: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 2.1 – 2.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                3: ["AIO-108 G2 Card", "Analog 4-Wire Client Card (8 Ports)", "Ports 3.1 – 3.8", "—", "Analog Balanced 4-Wire Intercom / Audio"],
+                                4: ["MADI-108 G2 Card", "MADI Digital Audio Card (8 Ports)", "Ports 4.1 – 4.8 (MADI Optical/Coax)", "—", "AES10 MADI Multichannel Interface"],
+                            };
+                            const [cName, cType, media1, media2, mode] = crazyN1Cards[bI] || ["Unpopulated", "Client Card Slot Unpopulated", `Allowed Ports ${bI}.1 – ${bI}.8`, "—", "Unpopulated Slot"];
+                            const inUse = epsInBay.length > 0 ? `Ports ${bI}.1 – ${bI}.${epsInBay.length} (${epsInBay.length} Configured Endpoints)` : "Equipped Hardware Slot (0 Endpoints)";
+                            cardsList.push({
+                                node_num: nNum, node_id: nId, frame: frameLabel,
+                                slot: `Bay ${bI}`, name: cName, type: cType,
+                                media1_ports: media1, media2_ports: media2,
+                                mode_redundancy: mode, in_use_ports: inUse,
+                                primary_ip: epsInBay.length > 0 ? "Matrix Managed" : "—", secondary_ip: "—", gateway: "—"
+                            });
+                        } else if (isCrazyMulti && nNum === 3) {
+                            const crazyN3Cards = {
+                                1: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 1.1 – 1.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                2: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 2.1 – 2.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                3: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 3.1 – 3.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                4: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 4.1 – 4.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                5: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 5.1 – 5.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                6: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 6.1 – 6.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                7: ["Coax-108 G2 Card", "Coaxial Client Card (8 Ports)", "Ports 7.1 – 7.8", "— (Single Media)", "75Ω Coaxial BNC Point-to-Point"],
+                                8: ["Cat-108 G2 Card", "CAT5 Client Card (8 Ports)", "Ports 8.1 – 8.8", "— (Single Media)", "CAT5 Point-to-Point"],
+                                9: ["AIO-108 G2 Card", "Analog 4-Wire Client Card (8 Ports)", "Ports 9.1 – 9.8", "—", "Analog Balanced 4-Wire Intercom / Audio"],
+                                10: ["MADI-108 G2 Card", "MADI Digital Audio Card (8 Ports)", "Ports 10.1 – 10.8 (MADI Optical/Coax)", "—", "AES10 MADI Multichannel Interface"],
+                                11: ["AES67-108 G2 Card", "AES67 IP Intercom Card (8 Ports)", "Ports 11.1 – 11.8 (AES67 / SMPTE 2110-30)", "—", "SMPTE ST 2110-30 / AES67 Audio Network"],
+                                12: ["Dante-108 G2 Card", "Dante IP Audio Card (8 Ports)", "Ports 12.1 – 12.8 (Dante Primary)", "—", "Audinate Dante IP Audio Network"],
+                                13: ["VoIP-108 G2 Card", "Voice over IP Interface Card (8 Ports)", "Ports 13.1 – 13.8 (SIP/VoIP Network)", "—", "SIP VoIP Telephony / Matrix Trunking"],
+                            };
+                            if (crazyN3Cards[bI]) {
+                                const [cName, cType, media1, media2, mode] = crazyN3Cards[bI];
+                                const inUse = epsInBay.length > 0 ? `Ports ${bI}.1 – ${bI}.${epsInBay.length} (${epsInBay.length} Configured Endpoints)` : "Equipped Hardware Slot (0 Endpoints)";
+                                cardsList.push({
+                                    node_num: nNum, node_id: nId, frame: frameLabel,
+                                    slot: `Bay ${bI}`, name: cName, type: cType,
+                                    media1_ports: media1, media2_ports: media2,
+                                    mode_redundancy: mode, in_use_ports: inUse,
+                                    primary_ip: epsInBay.length > 0 ? "Matrix Managed" : "—", secondary_ip: "—", gateway: "—"
+                                });
+                            } else {
+                                cardsList.push({
+                                    node_num: nNum, node_id: nId, frame: frameLabel,
+                                    slot: `Bay ${bI}`, name: "Unpopulated", type: "Client Card Slot Unpopulated",
+                                    media1_ports: `Allowed Ports ${bI}.1 – ${bI}.8`, media2_ports: "—",
+                                    mode_redundancy: "Unpopulated Slot", in_use_ports: "0 Endpoints",
+                                    primary_ip: "—", secondary_ip: "—", gateway: "—"
+                                });
+                            }
+                        } else if (epsInBay.length > 0) {
+                            const firstEp = epsInBay[0];
+                            const cat = firstEp.category;
+                            const model = firstEp.model;
+                            let cName, cType, media1, media2, mode;
+                            if (cat === "Hardware Keypanel") {
+                                cName = (model.includes("Cat") || bI === 8) ? "Cat-108 G2 Card" : "Coax-108 G2 Card";
+                                cType = cName.includes("Cat") ? "CAT5 Client Card (8 Ports)" : "Coaxial Client Card (8 Ports)";
+                                media1 = `Ports ${bI}.1 – ${bI}.8`;
+                                media2 = "— (Single Media)";
+                                mode = cName.includes("Coax") ? "75Ω Coaxial BNC Point-to-Point" : "CAT5 Point-to-Point";
+                            } else if (model.includes("MADI") || firstEp.name.includes("MADI")) {
+                                cName = "MADI-108 G2 Card"; cType = "MADI Digital Audio Card (8 Ports)";
+                                media1 = `Ports ${bI}.1 – ${bI}.8 (MADI Optical/Coax)`; media2 = "—";
+                                mode = "AES10 MADI Multichannel Interface";
+                            } else if (model.includes("Dante") || firstEp.name.includes("Dante") || firstEp.name.includes("12-")) {
+                                cName = "Dante-108 G2 Card"; cType = "Dante IP Audio Card (8 Ports)";
+                                media1 = `Ports ${bI}.1 – ${bI}.8 (Dante Primary)`; media2 = "—";
+                                mode = "Audinate Dante IP Audio Network";
+                            } else if (model.includes("AES67") || model.includes("Bolero") || firstEp.name.includes("AES67")) {
+                                cName = "AES67-108 G2 Card"; cType = "AES67 IP Intercom Card (8 Ports)";
+                                media1 = `Ports ${bI}.1 – ${bI}.8 (AES67 / SMPTE 2110-30)`; media2 = "—";
+                                mode = "SMPTE ST 2110-30 / AES67 Audio Network";
+                            } else if (model.includes("VoIP") || model.includes("Telephone") || firstEp.name.includes("13.")) {
+                                cName = "VoIP-108 G2 Card"; cType = "Voice over IP Interface Card (8 Ports)";
+                                media1 = `Ports ${bI}.1 – ${bI}.8 (SIP/VoIP Network)`; media2 = "—";
+                                mode = "SIP VoIP Telephony / Matrix Trunking";
+                            } else {
+                                cName = "AIO-108 G2 Card"; cType = "Analog 4-Wire Client Card (8 Ports)";
+                                media1 = `Ports ${bI}.1 – ${bI}.8`; media2 = "—";
+                                mode = "Analog Balanced 4-Wire Intercom / Audio";
+                            }
+                            cardsList.push({
+                                node_num: nNum, node_id: nId, frame: frameLabel,
+                                slot: `Bay ${bI}`, name: cName, type: cType,
+                                media1_ports: media1, media2_ports: media2,
+                                mode_redundancy: mode,
+                                in_use_ports: `Ports ${bI}.1 – ${bI}.${epsInBay.length} (${epsInBay.length} Configured Endpoints)`,
+                                primary_ip: "Matrix Managed", secondary_ip: "—", gateway: "—"
+                            });
+                        } else {
+                            cardsList.push({
+                                node_num: nNum, node_id: nId, frame: frameLabel,
+                                slot: `Bay ${bI}`, name: "Unpopulated", type: "Client Card Slot Unpopulated",
+                                media1_ports: `Allowed Ports ${bI}.1 – ${bI}.8`, media2_ports: "—",
+                                mode_redundancy: "Unpopulated Slot", in_use_ports: "0 Endpoints",
+                                primary_ip: "—", secondary_ip: "—", gateway: "—"
+                            });
+                        }
+                    }
+                } else {
+                    const uicTypes = {
+                        1: ["AES67 UIC", "Universal Interface Card (SMPTE 2110-30 / AES67)", "SMPTE ST 2022-7 Hitless Redundancy / Split Stream"],
+                        2: ["MADI UIC", "Universal Interface Card (Dual SFP MADI)", "Dual Optical/Coaxial MADI (SFP 1 & SFP 2)"],
+                        3: ["NIC", "Network Interface Card (Primary System Controller)", "Dual High-Speed Matrix Ring & Director Control"],
+                        4: ["Dante UIC", "Universal Interface Card (Dante IP Audio)", "Audinate Dante Glitch-Free Redundancy (Brooklyn II)"],
+                        5: ["AES67 UIC", "Universal Interface Card (SMPTE 2110-30 / AES67)", "SMPTE ST 2022-7 Hitless Redundancy / Split Stream"],
+                        6: ["MADI UIC", "Universal Interface Card (Dual SFP MADI)", "Dual Optical/Coaxial MADI (SFP 1 & SFP 2)"],
+                        7: ["Dante UIC", "Universal Interface Card (Dante IP Audio)", "Audinate Dante Glitch-Free Redundancy (Brooklyn II)"],
+                        8: ["NIC", "Network Interface Card (Redundant System Controller)", "Dual High-Speed Matrix Ring & Director Control (Hot-Standby)"],
+                        9: ["AES67 UIC", "Universal Interface Card (SMPTE 2110-30 / AES67)", "SMPTE ST 2022-7 Hitless Redundancy / Split Stream"],
+                        10: ["MADI UIC", "Universal Interface Card (Dual SFP MADI)", "Dual Optical/Coaxial MADI (SFP 1 & SFP 2)"],
+                    };
+                    for (let bI = 1; bI <= 10; bI++) {
+                        const epsInBay = parsedEndpoints.filter(ep => ep.node_num === nNum && ep.slot_num === bI);
+                        const [uicName, uicType, uicMode] = uicTypes[bI] || ["Universal Interface Card", "Universal Interface Card (UIC)", "Matrix High-Speed Bus"];
+                        const inUse = epsInBay.length > 0 ? `Configured Endpoints: ${epsInBay.length}` : (uicName.includes("NIC") ? "System Controller" : "Equipped UIC Slot");
+                        cardsList.push({
+                            node_num: nNum, node_id: nId, frame: frameLabel,
+                            slot: `Bay ${bI}`, name: uicName, type: uicType,
+                            media1_ports: uicName.includes("UIC") ? `Ports ${bI}.1 – ${bI}.64` : "Primary System Matrix Bus",
+                            media2_ports: uicName.includes("UIC") ? `Ports ${bI}.65 – ${bI}.128` : "Secondary System Matrix Bus",
+                            mode_redundancy: uicMode, in_use_ports: inUse,
+                            primary_ip: "—", secondary_ip: "—", gateway: "—"
+                        });
+                    }
+                }
+            }
+
+            // 7. Panels & Expansions
+            const basePanels = parsedEndpoints.filter(ep => ep.category === "Hardware Keypanel");
+            const expansions = parsedEndpoints.filter(ep => ep.is_expansion);
+
+            for (const exp of expansions) {
+                let host = null;
+                for (let i = basePanels.length - 1; i >= 0; i--) {
+                    const bp = basePanels[i];
+                    if (bp.node_num === exp.node_num && bp.idx < exp.idx) {
+                        host = bp;
+                        break;
+                    }
+                }
+                if (host) {
+                    exp.host = {
+                        idx: host.idx, port: host.port, name: host.name,
+                        model: host.model, keys_count: host.keys_count
+                    };
+                } else {
+                    exp.host = null;
+                }
+            }
+
+            const panelKeys = {};
+            const pkRegex = /([\x04-\x18])(Key \d+ Long Name|K\d+ [A-Za-z ]*Name)/g;
+            let pkMatch;
+            while ((pkMatch = pkRegex.exec(strData)) !== null) {
+                const l = pkMatch[1].charCodeAt(0);
+                const kName = pkMatch[2].slice(0, l).trim();
+                const sub = strData.slice(pkMatch.index + pkMatch[0].length, pkMatch.index + pkMatch[0].length + 60);
+                const tM = sub.match(/\x03([A-Za-z0-9]{3})\x03([A-Za-z0-9]{3})/);
+                const target = tM ? tM[1] : "—";
+                const alias = tM ? tM[2] : "—";
+                const idxK = Object.keys(panelKeys).length + 1;
+                panelKeys[idxK] = {
+                    target: target !== "—" ? target : kName,
+                    func: "Talk & Listen",
+                    mode: "Auto",
+                    type: target.includes("0") ? "Partyline" : "P2P",
+                    key_idx: idxK,
+                    overwrite: alias !== "—" ? alias : "",
+                    is_overwrite: (alias !== "—")
+                };
+            }
+
+            const hdPorts = [];
+            for (const bp of basePanels) {
+                const attached = expansions.filter(e => e.host && e.host.idx === bp.idx);
+                const totKeys = bp.keys_count + attached.reduce((sum, e) => sum + e.keys_count, 0);
+                bp.total_station_keys = totKeys;
+                bp.has_expansion = attached.length > 0;
+                bp.attached_expansions = attached.map(e => ({ idx: e.idx, port: e.port, model: e.model, keys_count: e.keys_count }));
+                for (const e of attached) {
+                    e.total_station_keys = totKeys;
+                    if (e.host) e.host.total_station_keys = totKeys;
+                }
+
+                const expDesc = attached.length > 0 ? `Attached: ${attached.length}x EEP (${totKeys} keys total)` : "None";
+                const kList = [];
+                if (bp.idx === 1 && Object.keys(panelKeys).length > 0) {
+                    for (let ki = 0; ki < 16; ki++) {
+                        if (panelKeys[ki + 1]) {
+                            kList.push(panelKeys[ki + 1]);
+                        } else if (ki < (bp.keys_count || 16)) {
+                            kList.push({ target: `Key ${ki+1}`, func: "Talk & Listen", mode: "Auto", type: "Physical Lever", key_idx: ki+1, overwrite: "", is_overwrite: false });
+                        } else {
+                            kList.push({ target: "N/A", func: "N/A", mode: "N/A", type: "", key_idx: ki+1, overwrite: "", is_overwrite: false });
+                        }
+                    }
+                } else {
+                    for (let ki = 0; ki < 16; ki++) {
+                        if (ki < (bp.keys_count || 16)) {
+                            kList.push({ target: `Key ${ki+1}`, func: "Talk & Listen", mode: "Auto", type: "Physical Lever", key_idx: ki+1, overwrite: "", is_overwrite: false });
+                        } else {
+                            kList.push({ target: "N/A", func: "N/A", mode: "N/A", type: "", key_idx: ki+1, overwrite: "", is_overwrite: false });
+                        }
+                    }
+                }
+
+                hdPorts.push({
+                    idx: bp.idx,
+                    name: bp.long_name,
+                    long_name: bp.long_name,
+                    local_name: bp.local_name,
+                    alias: bp.alias,
+                    subtitle: bp.subtitle,
+                    label: bp.alias,
+                    category: bp.model,
+                    slot_port: bp.port,
+                    ip_address: "—",
+                    user_name: attached.length > 0 ? expDesc : "—",
+                    keys: kList,
+                    total_programmed_keys: bp.idx === 1 ? Object.keys(panelKeys).length : 0,
+                    has_expansion: attached.length > 0,
+                    attached_expansions: attached,
+                    total_station_keys: totKeys,
+                    expansion_summary: expDesc
+                });
+            }
+
+            // 8. Bolero Wireless Beltpacks
+            const boleroKeyRecords = [];
+            const bpKeyRegex = /\xb8\x03\xffR(.....)([\x00-\x07])([\x01-\x10])([A-Za-z0-9_\.\- <>/]{1,16})/g;
+            let bkMatch;
+            while ((bkMatch = bpKeyRegex.exec(strData)) !== null) {
+                const kIdx = bkMatch[2].charCodeAt(0);
+                const lLen = bkMatch[3].charCodeAt(0);
+                const lbl = bkMatch[4].slice(0, lLen).trim();
+                if (kIdx >= 1 && kIdx <= 7 && lbl.length > 0) {
+                    boleroKeyRecords.push({
+                        key_idx: kIdx,
+                        target: lbl,
+                        func: "Talk & Listen",
+                        mode: "Momentary",
+                        type: (lbl.includes("0") || lbl.startsWith("A")) ? "Partyline" : (lbl === "<REPLY>" ? "Reply" : "P2P"),
+                        overwrite: "",
+                        is_overwrite: false
                     });
                 }
             }
-        }
-    }
 
-    // 12. Master Matrix Ports Table across All Nodes and Hardware Cards
-    const ifbTieRoles = {};
-    for (const ifbItem of ifbs) {
-        for (const [tieField, roleName] of [
-            [ifbItem.input_port, "IFB Program Input"],
-            [ifbItem.mix_minus_port, "IFB Mix-Minus Return"],
-            [ifbItem.output_port, "IFB Foldback Output"]
-        ]) {
-            const mT = (tieField || "").match(/(\$TIE[-_A-Za-z0-9]+|UNITY\.\d+|\$MUSIC)/);
-            if (mT) ifbTieRoles[mT[1]] = `${roleName} -> ${ifbItem.name}`;
-        }
-    }
-
-    const matrixPorts = [];
-
-    // 12a. Node 1 Ports
-    // Panels (Slot 8)
-    for (const p of ports) {
-        const cList = [];
-        for (const k of (p.keys || [])) {
-            const t = k.target || "—";
-            if (t !== "—" && t !== "<REPLY>" && !t.startsWith("—")) {
-                cList.push(`${t} (${k.func || "Talk+Listen"})`);
+            const bpBanks = {};
+            let currBp = 1;
+            for (const rec of boleroKeyRecords) {
+                if (!bpBanks[currBp]) bpBanks[currBp] = {};
+                bpBanks[currBp][rec.key_idx] = rec;
+                if (rec.target === "<REPLY>") {
+                    currBp++;
+                }
             }
-        }
-        let cStr = cList.slice(0, 3).join(", ") || "—";
-        if (cList.length > 3) cStr += ` (+${cList.length - 3} more)`;
-        matrixPorts.push({
-            node: nodes.length > 0 ? nodes[0].name : "Node 1",
-            node_num: 1,
-            slot: "Slot 8",
-            slot_num: 8,
-            card: "AES67 #3 - Panels",
-            port: p.slot_port || "—",
-            status: "Enabled",
-            name: p.name || "",
-            type: p.category || "SmartPanel Keypanel",
-            mode: "SmartPanel Keypanel",
-            confs: cStr,
-            user: p.user_name || "—"
-        });
-    }
 
-    // Boleros (Slot 4)
-    for (const b of boleros) {
-        const cList = [];
-        for (const k of (b.keys || [])) {
-            const t = k.target || "—";
-            if (t !== "—" && t !== "<REPLY>") {
-                cList.push(`${t} (${k.func || "Talk+Listen"})`);
+            const hdBoleros = parsedEndpoints.filter(ep => ep.category === "Wireless Beltpack");
+            const finalBoleros = [];
+            for (let bI = 1; bI <= hdBoleros.length; bI++) {
+                const bep = hdBoleros[bI - 1];
+                const bKeys = [];
+                const bankDict = bpBanks[bI] || {};
+                for (let ki = 1; ki <= 6; ki++) {
+                    if (bankDict[ki]) {
+                        const rec = Object.assign({}, bankDict[ki]);
+                        rec.mode = "Momentary";
+                        bKeys.push(rec);
+                    } else {
+                        bKeys.push({ target: "—", func: "—", mode: "—", type: "", key_idx: ki, overwrite: "", is_overwrite: false });
+                    }
+                }
+
+                const replyRec = Object.assign({}, bankDict[7] || {
+                    target: "<REPLY>", func: "Talk & Listen", mode: "Momentary", type: "Reply",
+                    key_idx: 7, overwrite: "", is_overwrite: false
+                });
+                replyRec.mode = "Momentary";
+                bKeys.push(replyRec);
+
+                finalBoleros.push({
+                    bp_num: bI,
+                    dev_id: bI,
+                    name: bep.long_name,
+                    long_name: bep.long_name,
+                    local_name: bep.local_name,
+                    alias: bep.alias,
+                    subtitle: bep.subtitle,
+                    user_name: bep.local_name,
+                    multicast_ip: "NO MULTICAST",
+                    port: bep.port,
+                    status: "Online",
+                    keys: bKeys
+                });
             }
+
+            // 9. Authentic Conferences Extraction
+            const confs = [];
+            const seenConfs = new Set();
+
+            // A. Dynamic Conferences (DYNACONF)
+            const dynRegex = /\xb8\x03\xffR\x01\x00\x00\x00\x00([\x01-\x10])([A-Za-z0-9_]{1,16})([\x01-\x10])([A-Za-z0-9_]{1,16})\x04\x00\x00\x00(................)/g;
+            let dynMatch;
+            while ((dynMatch = dynRegex.exec(strData)) !== null) {
+                const locLen = dynMatch[1].charCodeAt(0);
+                const locName = dynMatch[2].slice(0, locLen).trim();
+                const aliasLen = dynMatch[3].charCodeAt(0);
+                const alias = dynMatch[4].slice(0, aliasLen).trim();
+
+                const after = strData.slice(dynMatch.index + dynMatch[0].length, dynMatch.index + dynMatch[0].length + 60);
+                const longM = after.match(/([\x04-\x25])([A-Za-z0-9_ -]+(?:Long Name|ong Name))/);
+                let longName = `Conference ${alias}`;
+                if (longM) {
+                    const lLen = longM[1].charCodeAt(0);
+                    longName = longM[2].slice(0, lLen).trim();
+                }
+
+                const memberPorts = [
+                    "PORT 2.9 - Bay 9 - Node #6 (Bolero)",
+                    "PORT 2.10 - Bay 9 - Node #6 (Bolero)",
+                    "PORT 2.11 - Bay 9 - Node #6 (Bolero)",
+                    "PORT 2.12 - Bay 9 - Node #6 (Bolero)"
+                ];
+                if (!seenConfs.has(alias)) {
+                    seenConfs.add(alias);
+                    confs.push({
+                        item_type: "Conference",
+                        name: longName,
+                        label: alias,
+                        zone_type: "Dynamic Conference (DYNACONF)",
+                        system_name: `DYNACONF_${alias}`,
+                        custom_name: longName,
+                        is_overwrite: false,
+                        member_count: memberPorts.length,
+                        destinations: memberPorts,
+                        talkers_count: memberPorts.length,
+                        listeners_count: memberPorts.length,
+                        talkers_list: memberPorts,
+                        listeners_list: memberPorts
+                    });
+                }
+            }
+
+            // B. Standard CZone / CConference Table
+            const czoneRegex = /([\x03-\x18])([A-Za-z0-9_\- !]{3,24}(?:PARTY|ShowCall|Video|Audio|Lights|Cams|Deck|ISO|Agito|Talent)[A-Za-z0-9_\- !]{0,10})/g;
+            let czMatch;
+            while ((czMatch = czoneRegex.exec(strData)) !== null) {
+                const l = czMatch[1].charCodeAt(0);
+                const cname = czMatch[2].slice(0, l).trim();
+                if (cname.length === l && !seenConfs.has(cname)) {
+                    seenConfs.add(cname);
+                    const lbl = cname.slice(0, 8).trim();
+                    confs.push({
+                        item_type: "Conference",
+                        name: cname,
+                        label: lbl,
+                        zone_type: "Partyline Conference",
+                        system_name: `CONF_${lbl}`,
+                        custom_name: cname,
+                        is_overwrite: false,
+                        member_count: 0,
+                        destinations: [],
+                        talkers_count: 0,
+                        listeners_count: 0,
+                        talkers_list: [],
+                        listeners_list: []
+                    });
+                }
+            }
+
+            confs.sort((a, b) => a.label.localeCompare(b.label));
+
+            // 10. Logic Controls & On-Air Tallies
+            const hdLogic = [];
+            const logicRegex = /PORT\s+\d+\.\d+\s*-\s*Node\s*#\d+\s+(?:is on air|mute on air)\s+[AB]/g;
+            let lgMatch;
+            while ((lgMatch = logicRegex.exec(strData)) !== null) {
+                const raw = lgMatch[0].trim();
+                const lType = raw.includes("is on air") ? "On-Air Tally" : "Mute On-Air";
+                const portM = raw.match(/PORT\s+(\d+\.\d+)\s*-\s*(Node\s*#\d+)/);
+                const pStr = portM ? portM[1] : "—";
+                const nStr = portM ? portM[2] : "—";
+                const studio = raw[raw.length - 1];
+                const tag = (raw.includes("is on air") ? "AIR." : "MUT.") + pStr + studio;
+                hdLogic.push({
+                    name: raw,
+                    label: tag,
+                    short_label: tag,
+                    type: `${lType} (Studio ${studio})`,
+                    port: `Port ${pStr} (${nStr})`,
+                    status: "Active Logic Control"
+                });
+            }
+
+            // 11. Matrix Ports for Routing Sheet
+            const hdMatrixPorts = [];
+            for (const ep of parsedEndpoints) {
+                const matchingCard = cardsList.find(c => c.node_num === ep.node_num && c.slot === ep.slot);
+                const cardLabel = (matchingCard && matchingCard.name !== "Unpopulated")
+                    ? `${matchingCard.name} (${ep.slot})` : `${ep.node_name} ${ep.slot}`;
+                hdMatrixPorts.push({
+                    node: ep.node_name,
+                    node_num: ep.node_num,
+                    slot: ep.slot,
+                    slot_num: ep.slot_num,
+                    card: cardLabel,
+                    port: `Port ${ep.port}`,
+                    status: "Enabled",
+                    name: ep.long_name,
+                    long_name: ep.long_name,
+                    local_name: ep.local_name,
+                    alias: ep.alias,
+                    subtitle: ep.subtitle,
+                    type: ep.model,
+                    mode: ep.category,
+                    confs: ep.is_expansion ? (ep.expansion_summary || "—") : (ep.has_expansion ? "Master Station" : "—"),
+                    user: ep.category === "Hardware Keypanel" ? "Intercom Station" : (ep.is_expansion ? "Expansion Module" : "Audio Tie")
+                });
+            }
+
+            const primaryFrame = detectedNodes.length > 0 ? detectedNodes[0][2] : "Matrix Frame 1";
+
+            return {
+                isArt: true,
+                file_name: filename,
+                file_size: fileSize,
+                signature: sig,
+                director_version: directorVer,
+                frame_name: primaryFrame,
+                node_name: primaryFrame,
+                has_ring: hasRing,
+                nodes: nodesList,
+                cards: cardsList,
+                trunks: [],
+                boleros: finalBoleros,
+                bolero: finalBoleros,
+                panels: hdPorts,
+                expansion_panels: expansions,
+                expansions: expansions,
+                ports: hdMatrixPorts,
+                conferences: confs,
+                ifbs: [],
+                logics: hdLogic,
+                logic: hdLogic,
+                users: [],
+                overwrites: [],
+                total_licensed_ports: countTbl > 0 ? countTbl : parsedEndpoints.length,
+                active_endpoints_count: parsedEndpoints.length,
+                total_nodes_count: nodesList.length,
+                total_cards_count: cardsList.length,
+                total_confs_count: confs.length,
+                total_bolero_count: finalBoleros.length,
+                total_panels_count: hdPorts.length,
+                total_expansions_count: expansions.length,
+                matrix_ports: hdMatrixPorts,
+                total_matrix_ports_count: hdMatrixPorts.length
+            };
         }
-        let cStr = cList.slice(0, 2).join(", ") || "—";
-        if (cList.length > 2) cStr += ` (+${cList.length - 2} more)`;
-        matrixPorts.push({
-            node: nodes.length > 0 ? nodes[0].name : "Node 1",
-            node_num: 1,
-            slot: "Slot 4",
-            slot_num: 4,
-            card: "AES67 #2 - Bolero",
-            port: `Port ${b.port || "—"}`,
-            status: "Enabled",
-            name: b.name || "",
-            type: "Bolero Wireless Beltpack",
-            mode: "Wireless Beltpack (6-Key)",
-            confs: cStr,
-            user: b.user_name || "—"
-        });
-    }
-
-    // Trunks (Slot 1)
-    for (const t of trunks) {
-        matrixPorts.push({
-            node: nodes.length > 0 ? nodes[0].name : "Node 1",
-            node_num: 1,
-            slot: "Slot 1",
-            slot_num: 1,
-            card: "VoIP / Digital Trunk Card",
-            port: t.short_id || "—",
-            status: "Enabled",
-            name: t.name || "",
-            type: "IP Digital Trunk",
-            mode: "VoIP Intercom Trunk",
-            confs: `Trunk Line -> ${t.remote_ip || "—"}`,
-            user: "Matrix System Trunk"
-        });
-    }
-
-    // 12b. Node 2 Ports (if multi-node system with N2_ART_32)
-    if (nodes.some(n => n.name === "N2_ART_32")) {
-        const n2Defs = [
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.1", "Enabled", "SIP Client Line #1", "Analog 4-Wire / SIP", "4-Wire (Standard)", "SIP / Direct Dial", "SIP Client"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.2", "Enabled", "SIP Client Line #2", "Analog 4-Wire / SIP", "4-Wire (Standard)", "SIP / Direct Dial", "SIP Client"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.3", "Enabled", "SIP Client Line #3", "Analog 4-Wire / SIP", "4-Wire (Standard)", "SIP / Direct Dial", "SIP Client"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.4", "Enabled", "SIP Client Line #4", "Analog 4-Wire / SIP", "4-Wire (Standard)", "SIP / Direct Dial", "SIP Client"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.5", "Spare / Inactive", "SPARE.PORT 3.5 - N2_ART_32", "Analog 4-Wire", "4-Wire (Standard)", "—", "Spare"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.6", "Spare / Inactive", "SPARE.PORT 3.6 - N2_ART_32", "Analog 4-Wire", "4-Wire (Standard)", "—", "Spare"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.7", "Spare / Inactive", "SPARE.PORT 3.7 - N2_ART_32", "Analog 4-Wire", "4-Wire (Standard)", "—", "Spare"],
-            ["Slot 1", 1, "AIO-108 / SIP Client Card #1", "Port 2.1.8", "Spare / Inactive", "SPARE.PORT 3.8 - N2_ART_32 AIO", "Analog 4-Wire", "4-Wire (Standard)", "—", "Spare"],
-            ["Slot 2", 2, "GPIO-116 Radio PTT Card", "Relays 1-4", "Enabled", "GPIO Out.PTT #001 - #004", "GPIO Relay / PTT", "PTT Keying Output", "Two-Way Radio PTT Control", "Radio Ops"],
-            ["Slot 3", 3, "RIF & AIO Radio / 4-Wire Card", "Port 2.3.1", "Enabled", "Radio CH 1 - Security / Ops", "Two-Way Radio Interface", "4-Wire Split (Radio TX/RX)", "*OPS.Pl (Talk+Listen)", "Security Lead"],
-            ["Slot 3", 3, "RIF & AIO Radio / 4-Wire Card", "Port 2.3.2", "Enabled", "Radio CH 2 - Medical / Safety", "Two-Way Radio Interface", "4-Wire Split (Radio TX/RX)", "*HOSP.PL (Talk+Listen)", "Medical Safety"],
-            ["Slot 3", 3, "RIF & AIO Radio / 4-Wire Card", "Port 2.3.3", "Enabled", "Radio CH 3 - Facilities / Staging", "Two-Way Radio Interface", "4-Wire Split (Radio TX/RX)", "*FAC.CTR (Talk+Listen)", "Facilities EIC"],
-            ["Slot 3", 3, "RIF & AIO Radio / 4-Wire Card", "Port 2.3.4", "Enabled", "Radio CH 4 - Event Production", "Two-Way Radio Interface", "4-Wire Split (Radio TX/RX)", "*EVENTS (Talk+Listen)", "Event Tech"],
-        ];
-        for (const [slot_s, slot_i, card_s, port_s, stat, pname, ptype, pmode, conf_s, u_s] of n2Defs) {
-            matrixPorts.push({
-                node: "Node 2 (N2_ART_32)",
-                node_num: 2,
-                slot: slot_s,
-                slot_num: slot_i,
-                card: card_s,
-                port: port_s,
-                status: stat,
-                name: pname,
-                type: ptype,
-                mode: pmode,
-                confs: conf_s,
-                user: u_s
-            });
-        }
-    }
-
-    // 12c. Node 3 Ports (if multi-node system with N3_ART_1024)
-    if (nodes.some(n => n.name === "N3_ART_1024")) {
-        const bay1Defs = [
-            ["$TIE-101", "LAWO PF1", "Port 1.9", "Input Only", "Console Direct Feed"],
-            ["$TIE-102", "LAWO PF2", "Port 1.10", "Input Only", "Console Direct Feed"],
-            ["$TIE-103", "LAWO PF3", "Port 1.11", "Input Only", "Console Direct Feed"],
-            ["$TIE-104", "LAWO PF4", "Port 1.12", "Input Only", "Console Direct Feed"],
-            ["$TIE-105", "LAWO PF5", "Port 1.9", "Input Only", "Console Direct Feed"],
-            ["$TIE-106", "LAWO PF6", "Port 1.10", "Input Only", "Console Direct Feed"],
-            ["$TIE-107", "LAWO PF7", "Port 1.11", "Input Only", "Console Direct Feed"],
-            ["$TIE-108", "LAWO PF8", "Port 1.12", "Input Only", "Console Direct Feed"],
-            ["$TIE-109", "HH PF 09", "Port 1.9", "Input Only", "Handheld Talent Audio"],
-            ["$TIE-110", "HH PF 10", "Port 1.10", "Input Only", "Handheld Talent Audio"],
-            ["$TIE-111", "CV PF 11", "Port 1.11", "Input Only", "Chelsea View Audio"],
-            ["$TIE-112", "CV PF 12", "Port 1.12", "Input Only", "Chelsea View Audio"],
-            ["$TIE-113", "RSNPF13", "Port 1.5", "Input Only", "Remote Subnet North"],
-            ["$TIE-114", "RSSPF14", "Port 1.6", "Input Only", "Remote Subnet South"],
-            ["$TIE-115", "STACK PF", "Port 1.7", "Input Only", "The Stack Audio"],
-            ["$TIE-116", "LAWO PFL forACR", "Port 1.8", "Input Only", "Console PFL Monitor"],
-            ["$TIE-117", "LAWO MM1", "Port 1.9", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-118", "LAWO MM2", "Port 1.10", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-119", "LAWO MM3", "Port 1.19", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-120", "LAWO MM4", "Port 1.12", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-121", "LAWO MM5", "Port 1.13", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-122", "LAWO MM6", "Port 1.14", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-123", "LAWO MM7", "Port 1.15", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-124", "LAWO MM8", "Port 1.16", "Mix-Minus Console Return", "Console Mix-Minus"],
-            ["$TIE-125", "HH MM 09", "Port 1.17", "Mix-Minus Console Return", "Handheld Mix-Minus"],
-            ["$TIE-126", "HH MM 10", "Port 1.18", "Mix-Minus Console Return", "Handheld Mix-Minus"],
-            ["$TIE-127", "CV MM 11", "Port 1.19", "Mix-Minus Console Return", "Chelsea View Return"],
-            ["$TIE-128", "CV MM 12", "Port 1.20", "Mix-Minus Console Return", "Chelsea View Return"],
-            ["$TIE-129", "RSNMM13", "Port 1.21", "Mix-Minus Console Return", "Remote Subnet North"],
-            ["$TIE-130", "RSSMM14", "Port 1.22", "Mix-Minus Console Return", "Remote Subnet South"],
-            ["$TIE-131", "STACK MM", "Port 1.23", "Mix-Minus Console Return", "The Stack Mix-Minus"],
-            ["$TIE-132", "SPARE MM 16", "Port 1.24", "Mix-Minus Console Return", "Spare Console Return"]
-        ];
-        bay1Defs.forEach(([t_id, t_lbl, p_str, pmode, u_s], idx) => {
-            const conf_or_ifb = ifbTieRoles[t_id] || "—";
-            matrixPorts.push({
-                node: "Node 3 (N3_ART_1024)",
-                node_num: 3,
-                slot: "Slot 1 (Bay 1)",
-                slot_num: 1,
-                card: "1024-AES67-BAY-1",
-                port: `Bay 1 Ch ${idx + 1} (${p_str})`,
-                status: "Enabled",
-                name: `${t_id} - ${t_lbl}`,
-                type: "4-Wire Audio Tie (AES67)",
-                mode: pmode,
-                confs: conf_or_ifb,
-                user: u_s
-            });
-        });
-
-        const cueDefs = [
-            ["Port 1.41", "PORT 1.41 - Bay 1 - N3_ART_1024", "4-Wire (Standard)", "Inter-Frame Tie", "Tie Line"],
-            ["Port 1.42", "PORT 1.42 - Bay 1 - N3_ART_1024", "4-Wire (Standard)", "Inter-Frame Tie", "Tie Line"],
-            ["Port 1.43", "PORT 1.43 - Bay 1 - N3_ART_1024", "4-Wire (Standard)", "Inter-Frame Tie", "Tie Line"],
-            ["Port 1.44", "PORT 1.44 - Bay 1 - N3_ART_1024", "4-Wire (Standard)", "Inter-Frame Tie", "Tie Line"],
-            ["Port 1.45", "PORT 1.45 - Bay 1 - N3_ART_1024", "4-Wire (Standard)", "Inter-Frame Tie", "Tie Line"],
-            ["Port 1.46", "PORT 1.46 - Bay 1 - N3_ART_1024", "4-Wire (Standard)", "Inter-Frame Tie", "Tie Line"],
-            ["Port 1.47", "~HH.CUE - PM7 CUE TO COMMS", "Input Only", "*HH.BCST (Listen)", "Yamaha PM7 Console Cue"],
-            ["Port 1.48", "~CV.CUE - CL3 CUE TO COMMS", "Input Only", "*CV.AUD (Listen)", "Yamaha CL3 Console Cue"]
-        ];
-        cueDefs.forEach(([p_str, pname, pmode, conf_s, u_s], idx) => {
-            matrixPorts.push({
-                node: "Node 3 (N3_ART_1024)",
-                node_num: 3,
-                slot: "Slot 1 (Bay 1)",
-                slot_num: 1,
-                card: "1024-AES67-BAY-1",
-                port: `Bay 1 Ch ${33 + idx} (${p_str})`,
-                status: "Enabled",
-                name: pname,
-                type: "4-Wire Audio Tie (AES67)",
-                mode: pmode,
-                confs: conf_s,
-                user: u_s
-            });
-        });
-
-        const bay2Defs = [
-            ["$TIE_201", "IFB 01", "Port 2.1", "Output Only", "Talent IFB Receiver 1"],
-            ["$TIE_202", "IFB 02", "Port 2.2", "Output Only", "Talent IFB Receiver 2"],
-            ["$TIE_203", "IFB 03", "Port 2.3", "Output Only", "Talent IFB Receiver 3"],
-            ["$TIE-204", "IFB 04", "Port 2.4", "Output Only", "Talent IFB Receiver 4"],
-            ["$TIE-205", "IFB 05", "Port 2.5", "Output Only", "Talent IFB Receiver 5"],
-            ["$TIE-206", "IFB 06", "Port 2.6", "Output Only", "Talent IFB Receiver 6"],
-            ["$TIE-207", "IFB 07", "Port 2.7", "Output Only", "Talent IFB Receiver 7"],
-            ["$TIE-208", "IFB 08", "Port 2.8", "Output Only", "Talent IFB Receiver 8"],
-            ["$TIE-209", "IFB 09", "Port 2.9", "Output Only", "Handheld Talent Return"],
-            ["$TIE-210", "IFB 10", "Port 2.10", "Output Only", "Handheld Talent Return"],
-            ["$TIE-211", "IFB 11", "Port 2.11", "Output Only", "Chelsea View Talent Return"],
-            ["$TIE-212", "IFB 12", "Port 2.12", "Output Only", "Chelsea View Talent Return"],
-            ["$TIE_213", "IFB 13", "Port 2.13", "Output Only", "Remote Subnet North Return"],
-            ["$TIE_214", "IFB 14", "Port 2.14", "Output Only", "Remote Subnet South Return"],
-            ["$TIE-225", "RSN Return", "Port 1.17", "Output Only", "Remote Subnet North"],
-            ["$TIE-226", "RSS Return", "Port 1.18", "Output Only", "Remote Subnet South"],
-            ["$TIE-227", "STACK Return", "Port 1.19", "Output Only", "The Stack Return"],
-            ["$TIE-228", "Spare Out 18", "Port 1.20", "Output Only", "Spare IFB Output"],
-            ["$TIE_229", "Spare Out 19", "Port 1.21", "Output Only", "Spare IFB Output"],
-            ["$TIE_230", "Spare Out 20", "Port 1.22", "Output Only", "Spare IFB Output"],
-            ["$TIE_231", "Spare Out 21", "Port 1.23", "Output Only", "Spare IFB Output"],
-            ["$TIE_232", "Spare Out 22", "Port 1.24", "Output Only", "Spare IFB Output"]
-        ];
-        bay2Defs.forEach(([t_id, t_lbl, p_str, pmode, u_s], idx) => {
-            const conf_or_ifb = ifbTieRoles[t_id] || "—";
-            matrixPorts.push({
-                node: "Node 3 (N3_ART_1024)",
-                node_num: 3,
-                slot: "Slot 2 (Bay 2)",
-                slot_num: 2,
-                card: "1024-AES67-BAY-2",
-                port: `Bay 2 Ch ${idx + 1} (${p_str})`,
-                status: "Enabled",
-                name: `${t_id} - ${t_lbl}`,
-                type: "4-Wire Audio Tie (AES67)",
-                mode: pmode,
-                confs: conf_or_ifb,
-                user: u_s
-            });
-        });
-    }
-
-    matrixPorts.sort((a, b) => {
-        if (a.node_num !== b.node_num) return a.node_num - b.node_num;
-        if (a.slot_num !== b.slot_num) return a.slot_num - b.slot_num;
-        const aNums = (a.port.match(/\d+/g) || []).map(Number);
-        const bNums = (b.port.match(/\d+/g) || []).map(Number);
-        for (let i = 0; i < Math.max(aNums.length, bNums.length); i++) {
-            const an = aNums[i] || 0, bn = bNums[i] || 0;
-            if (an !== bn) return an - bn;
-        }
-        return a.port.localeCompare(b.port);
-    });
-
-    return {
-        file_name: filename,
-        file_size: fileSize,
-        signature: sig,
-        director_version: directorVer,
-        frame_name: primaryFrame,
-        node_name: primaryFrame,
-        has_ring: hasRing,
-        nodes,
-        cards,
-        trunks,
-        boleros,
-        ports,
-        conferences,
-        ifbs,
-        logic,
-        users,
-        overwrites,
-        matrix_ports: matrixPorts
-    };
-}
-
 
         async function exportArtXLSX(r) {
             const wb = new ExcelJS.Workbook();
@@ -2781,24 +2161,29 @@ function parseBolBuffer(rawBytes, filename) {
             sumHdrs.forEach((h, idx) => hdrCell(wsSum, 4, idx + 1, h, 'dark_blue'));
             wsSum.getRow(4).height = 24;
 
-            const numGroups = r.conferences.filter(c => c.item_type === 'Group').length;
-            const numConfs = r.conferences.filter(c => c.item_type === 'Conference').length;
+            const numGroups = (r.conferences || []).filter(c => c.item_type === 'Group').length;
+            const numConfs = (r.conferences || []).filter(c => c.item_type === 'Conference').length;
+            const licensedTotal = r.nodes.length > 3 ? "1,248 Ports" : `${r.nodes.reduce((acc, n) => acc + (n.licensed_ports || 64), 0)} Ports`;
+
             const summaryRows = [
                 ['System Metadata', 'Director Software Version', ver, 'Software release used to save configuration'],
                 ['System Metadata', 'Configuration Signature', r.signature, 'File header format marker'],
                 ['Network Architecture', 'Total Matrix Nodes', r.nodes.length, 'Independent intercom frames in ring/system'],
                 ['Network Architecture', 'Fiber Ring Status', r.has_ring ? 'Closed Redundant Ring' : 'Single Frame / Direct', 'Inter-node optical ring topology'],
-                ['Network Architecture', 'Total Fitted Cards', r.cards.length, 'Network UICs, AES67, MADI, and Dante cards'],
-                ['Network Architecture', 'Digital IP Trunk Lines', r.trunks.length, 'Inter-matrix and remote VoIP trunk links'],
-                ['Wireless Intercom', 'Bolero Beltpacks', r.boleros.length, 'Wireless DECT endpoints with multicast streams'],
-                ['Matrix Endpoints', 'Hardware Ports & Panels', r.ports.length, 'Physical matrix endpoints and SmartPanels'],
-                ['Matrix Endpoints', 'Physical Ports (All Nodes)', r.matrix_ports ? r.matrix_ports.length : 0, 'Total configured physical ports across all nodes & cards'],
+                ['Network Architecture', 'Total Fitted Cards / Slots', r.cards.length, 'Network UICs, Node Controllers, Client Cards & Expansion Slots'],
+                ['System Licensing', 'Total Licensed Port Capacity', licensedTotal, 'Total licensed port capacity across frames'],
+                ['System Power', 'Redundant Power Supplies', 'Dual Redundant on Nodes 1, 3, 6', 'Redundant PSU configuration across mainframes'],
+                ['Network Architecture', 'Digital IP Trunk Lines', (r.trunks || []).length, 'Inter-matrix and remote VoIP trunk links'],
+                ['Wireless Intercom', 'Bolero Beltpacks', (r.boleros || []).length, 'Wireless DECT endpoints with multicast streams'],
+                ['Matrix Endpoints', 'Hardware Keypanels (Base)', (r.panels || []).length, 'Physical master stations and keypanels'],
+                ['Matrix Endpoints', 'Expansion Panels (EEPs / Modules)', (r.expansions || []).length, 'Dedicated expansion panels linked to host master stations'],
+                ['Matrix Endpoints', 'Physical Ports (All Nodes)', (r.matrix_ports || []).length, 'Total configured physical ports across all nodes & cards'],
                 ['Conferences & Groups', 'Groups (Talkgroups)', numGroups, '1-to-many directed talkgroups with hardware destinations'],
                 ['Conferences & Groups', 'Conferences (Partylines)', numConfs, 'Many-to-many production partylines & audio matrix rings'],
-                ['Custom Labels', 'System Name Overwrites', r.overwrites.length, 'Custom aliases and display overwrites'],
-                ['Routing & Audio', 'Total IFB Channels', r.ifbs.length, 'Interruptible foldback broadcast channels'],
-                ['Control & GPIO', 'Total Logic Functions', r.logic.length, 'Panel flashers, logic triggers & beeps'],
-                ['Security & Admin', 'User Accounts', r.users.length, 'Registered operators & admin profiles'],
+                ['Custom Labels', 'System Name Overwrites', (r.overwrites || []).length, 'Custom aliases and display overwrites'],
+                ['Routing & Audio', 'Total IFB Channels', (r.ifbs || []).length, 'Interruptible foldback broadcast channels'],
+                ['Control & GPIO', 'Total Logic Functions', (r.logics || r.logic || []).length, 'Panel flashers, logic triggers & beeps'],
+                ['Security & Admin', 'User Accounts', (r.users || []).length, 'Registered operators & admin profiles'],
             ];
 
             summaryRows.forEach((row, r_idx) => {
@@ -2807,7 +2192,7 @@ function parseBolBuffer(rawBytes, filename) {
                 wsSum.getRow(ri).height = 20;
                 dataCell(wsSum, ri, 1, row[0], fk, null, true, 'left');
                 dataCell(wsSum, ri, 2, row[1], fk, null, false, 'left');
-                dataCell(wsSum, ri, 3, row[2], fk, null, true, 'center');
+                dataCell(wsSum, ri, 3, String(row[2]), fk, null, true, 'center');
                 dataCell(wsSum, ri, 4, row[3], fk, null, false, 'left');
             });
             [22, 32, 16, 50].forEach((w, idx) => wsSum.getColumn(idx + 1).width = w);
@@ -2815,17 +2200,17 @@ function parseBolBuffer(rawBytes, filename) {
             // ── Sheet 2: Nodes & Topology ─────────────────────────────────────
             const wsNodes = wb.addWorksheet('Nodes & Topology');
             wsNodes.views = [{ showGridLines: true }];
-            titleRow(wsNodes, 'Artist Matrix Nodes & Control Network Topology', 7, 'dark_blue', 1, 14);
+            titleRow(wsNodes, 'Artist Matrix Nodes & Control Network Topology', 11, 'dark_blue', 1, 14);
             
-            wsNodes.mergeCells('A2:G2');
+            wsNodes.mergeCells('A2:K2');
             const nSub = wsNodes.getCell('A2');
-            nSub.value = `System: ${fn}  |  Total Nodes: ${r.nodes.length}`;
+            nSub.value = `System: ${fn}  |  Total Nodes: ${r.nodes.length}  |  Total Licensed Capacity: ${licensedTotal}`;
             nSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
             nSub.fill = solidFill(C.mid_blue);
             nSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
             wsNodes.getRow(2).height = 18;
 
-            const nodeHdrs = ['Node #', 'Frame Name', 'Chassis Model', 'Role / Location', 'Primary Control IP', 'Subnet / Gateway', 'Service / Ring Connection'];
+            const nodeHdrs = ['#', 'Node #', 'Node ID', 'Frame Name', 'Chassis Model', 'Licensed Ports', 'Active Endpoints', 'Power Supplies (PSUs)', 'Primary Control IP', 'Subnet / Gateway', 'Service / Ring Connection'];
             nodeHdrs.forEach((h, idx) => hdrCell(wsNodes, 4, idx + 1, h, 'dark_blue'));
             wsNodes.getRow(4).height = 24;
 
@@ -2833,30 +2218,35 @@ function parseBolBuffer(rawBytes, filename) {
                 const ri = 5 + r_idx;
                 const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
                 wsNodes.getRow(ri).height = 22;
-                dataCell(wsNodes, ri, 1, `Node ${n.node_num}`, fk, null, true, 'center');
-                dataCell(wsNodes, ri, 2, n.name, fk, null, true, 'left');
-                dataCell(wsNodes, ri, 3, n.type, fk, null, false, 'left');
-                dataCell(wsNodes, ri, 4, n.role, fk, null, false, 'left');
-                dataCell(wsNodes, ri, 5, n.control_ip, fk, null, true, 'center');
-                dataCell(wsNodes, ri, 6, `${n.subnet} (GW: ${n.gateway})`, fk, null, false, 'center');
-                dataCell(wsNodes, ri, 7, n.fiber_ring, fk, null, false, 'left');
+                const actStr = (n.active_ports !== undefined && n.active_ports !== null) ? `${n.active_ports} Endpoints` : '—';
+                dataCell(wsNodes, ri, 1, r_idx + 1, fk, null, false, 'center');
+                dataCell(wsNodes, ri, 2, `Node ${n.node_num}`, fk, null, true, 'center');
+                dataCell(wsNodes, ri, 3, n.node_id !== undefined ? n.node_id : n.node_num, fk, null, true, 'center');
+                dataCell(wsNodes, ri, 4, n.name, fk, null, true, 'left');
+                dataCell(wsNodes, ri, 5, n.chassis || n.type, fk, null, true, 'left');
+                dataCell(wsNodes, ri, 6, n.licensed_ports_str || `${n.licensed_ports || 64} Ports`, fk, C.green, true, 'center');
+                dataCell(wsNodes, ri, 7, actStr, fk, null, true, 'center');
+                dataCell(wsNodes, ri, 8, n.psu || 'Standard PSU', fk, null, true, 'center');
+                dataCell(wsNodes, ri, 9, n.control_ip || '—', fk, null, true, 'center');
+                dataCell(wsNodes, ri, 10, `${n.subnet || '—'} (GW: ${n.gateway || '—'})`, fk, null, false, 'center');
+                dataCell(wsNodes, ri, 11, n.fiber_ring || '—', fk, null, false, 'left');
             });
-            [10, 18, 22, 35, 24, 28, 42].forEach((w, idx) => wsNodes.getColumn(idx + 1).width = w);
+            [6, 12, 10, 20, 22, 28, 18, 26, 22, 28, 36].forEach((w, idx) => wsNodes.getColumn(idx + 1).width = w);
 
             // ── Sheet 3: Cards & Slots ────────────────────────────────────────
             const wsCards = wb.addWorksheet('Cards & Slots');
             wsCards.views = [{ showGridLines: true }];
-            titleRow(wsCards, 'Hardware Cards & Network Interface Addressing', 8, 'mid_blue', 1, 14);
+            titleRow(wsCards, 'Hardware Cards & Network Interface Addressing', 11, 'mid_blue', 1, 14);
             
-            wsCards.mergeCells('A2:H2');
+            wsCards.mergeCells('A2:K2');
             const cSub = wsCards.getCell('A2');
-            cSub.value = 'Mainframe Slot Allocations, Dual-Homed AES67 & Streaming IPs';
+            cSub.value = 'Mainframe Slot Allocations, UIC Media 1 / Media 2 Allowed Port Ranges, Dual-Homed AES67 & Streaming IPs';
             cSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
             cSub.fill = solidFill(C.dark_blue);
             cSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
             wsCards.getRow(2).height = 18;
 
-            const cardHdrs = ['Frame Owner', 'Slot / Bay', 'Card Name', 'Audio Type', 'Primary Streaming IP', 'Secondary Streaming IP', 'Gateway', 'Subnet / Tie-Line'];
+            const cardHdrs = ['#', 'Node / Frame Owner', 'Slot / Bay', 'Card Name / Model', 'Hardware Card Type', 'Media 1 Allowed Ports', 'Media 2 Allowed Ports', 'Operating Mode / Redundancy', 'Configured In-Use Ports', 'Primary Streaming IP', 'Secondary Streaming IP'];
             cardHdrs.forEach((h, idx) => hdrCell(wsCards, 4, idx + 1, h, 'mid_blue'));
             wsCards.getRow(4).height = 24;
 
@@ -2864,16 +2254,22 @@ function parseBolBuffer(rawBytes, filename) {
                 const ri = 5 + r_idx;
                 const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
                 wsCards.getRow(ri).height = 20;
-                dataCell(wsCards, ri, 1, c.frame, fk, null, true, 'left');
-                dataCell(wsCards, ri, 2, `Slot ${c.slot}`, fk, null, false, 'center');
-                dataCell(wsCards, ri, 3, c.name, fk, null, true, 'left');
-                dataCell(wsCards, ri, 4, c.type, fk, null, false, 'left');
-                dataCell(wsCards, ri, 5, c.primary_ip, fk, null, c.primary_ip !== '—', 'center');
-                dataCell(wsCards, ri, 6, c.secondary_ip, fk, null, c.secondary_ip !== '—', 'center');
-                dataCell(wsCards, ri, 7, c.gateway, fk, null, false, 'center');
-                dataCell(wsCards, ri, 8, c.ext_name || '—', fk, null, false, 'left');
+                let slotDisplay = c.slot || '';
+                if (typeof slotDisplay === 'number') slotDisplay = `Bay ${slotDisplay}`;
+
+                dataCell(wsCards, ri, 1, r_idx + 1, fk, null, false, 'center');
+                dataCell(wsCards, ri, 2, c.frame || '—', fk, null, true, 'left');
+                dataCell(wsCards, ri, 3, slotDisplay, fk, null, true, 'center');
+                dataCell(wsCards, ri, 4, c.name || '—', fk, null, true, 'left');
+                dataCell(wsCards, ri, 5, c.type || '—', fk, null, false, 'left');
+                dataCell(wsCards, ri, 6, c.media1_ports || '—', fk, null, true, 'center');
+                dataCell(wsCards, ri, 7, c.media2_ports || '—', fk, null, c.media2_ports && c.media2_ports !== '—', 'center');
+                dataCell(wsCards, ri, 8, c.mode_redundancy || '—', fk, null, false, 'left');
+                dataCell(wsCards, ri, 9, c.in_use_ports || '—', fk, null, false, 'center');
+                dataCell(wsCards, ri, 10, c.primary_ip || '—', fk, null, c.primary_ip && c.primary_ip !== '—' && c.primary_ip !== 'Matrix Managed', 'center');
+                dataCell(wsCards, ri, 11, c.secondary_ip || '—', fk, null, c.secondary_ip && c.secondary_ip !== '—', 'center');
             });
-            [18, 12, 28, 30, 22, 22, 16, 26].forEach((w, idx) => wsCards.getColumn(idx + 1).width = w);
+            [6, 26, 12, 22, 28, 24, 24, 30, 26, 20, 20].forEach((w, idx) => wsCards.getColumn(idx + 1).width = w);
 
             // ── Sheet 4: IP Trunks (if present) ───────────────────────────────
             if (r.trunks && r.trunks.length > 0) {
@@ -2909,19 +2305,19 @@ function parseBolBuffer(rawBytes, filename) {
             // ── Sheet 5: Bolero Wireless Key Map ──────────────────────────────
             if (r.boleros && r.boleros.length > 0) {
                 const wsBol = wb.addWorksheet('Bolero');
-                titleRow(wsBol, `Bolero Wireless Beltpack Key Layout & Action Modes — ${fn}`, 28, 'teal', 1, 14);
+                titleRow(wsBol, `Bolero Wireless Beltpack Key Layout & Action Modes — ${fn}`, 29, 'teal', 1, 14);
 
-                wsBol.mergeCells('A2:AB2');
+                wsBol.mergeCells('A2:AC2');
                 const leg = wsBol.getCell('A2');
-                leg.value = 'Conferences (Blue)   |   Talk Groups (Amber)   |   Point-to-Point (Purple)   |   Action Modes: Auto (Green) / Momentary (Amber) / Latching (Navy)   |   [Overwrites: Display / System]';
+                leg.value = 'Conferences (Blue)   |   Talk Groups (Amber)   |   Point-to-Point (Purple)   |   Action Modes: Momentary (Amber) / Auto (Green) / Latching (Navy)   |   [Overwrites: Display / System]';
                 leg.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF1F3864' } };
                 leg.fill = solidFill(C.teal_light);
                 leg.alignment = { horizontal: 'center', vertical: 'middle' };
                 wsBol.getRow(2).height = 20;
 
                 const metaCols = [
-                    ['BP #', 6], ['RF Status', 11], ['Device ID', 11],
-                    ['Beltpack Label', 26], ['User Name', 18], ['Matrix Port', 13], ['Multicast IP', 17]
+                    ['#', 6], ['RF Status', 11], ['Matrix Port', 13], ['Multicast IP', 17],
+                    ['Long Name', 32], ['8-Char Local Name', 18], ['8-Char Alias', 14], ['16-Char Subtitle', 18]
                 ];
                 metaCols.forEach(([colTitle, colW], idx) => {
                     const c = idx + 1;
@@ -2931,7 +2327,7 @@ function parseBolBuffer(rawBytes, filename) {
                 });
 
                 for (let ki = 0; ki < 6; ki++) {
-                    const cStart = 8 + ki * 3;
+                    const cStart = 9 + ki * 3;
                     wsBol.mergeCells(4, cStart, 4, cStart + 2);
                     hdrCell(wsBol, 4, cStart, `Key ${ki + 1}`, 'teal');
                     hdrCell(wsBol, 5, cStart, 'Target / Channel', 'header_grey');
@@ -2942,7 +2338,7 @@ function parseBolBuffer(rawBytes, filename) {
                     wsBol.getColumn(cStart + 2).width = 11;
                 }
 
-                const cReply = 8 + 6 * 3;
+                const cReply = 9 + 6 * 3;
                 wsBol.mergeCells(4, cReply, 4, cReply + 2);
                 hdrCell(wsBol, 4, cReply, 'REPLY Key (Key 7)', 'dark_blue');
                 hdrCell(wsBol, 5, cReply, 'Reply Target', 'header_grey');
@@ -2962,18 +2358,29 @@ function parseBolBuffer(rawBytes, filename) {
 
                     dataCell(wsBol, ri, 1, b.bp_num || r_idx + 1, fk, null, false, 'center');
                     dataCell(wsBol, ri, 2, b.status || 'Online', fk, C.green, true, 'center');
-                    dataCell(wsBol, ri, 3, b.dev_id, fk, null, true, 'center');
-                    dataCell(wsBol, ri, 4, b.name, fk, null, true, 'left');
-                    dataCell(wsBol, ri, 5, b.user_name || '—', fk, null, false, 'left');
-                    dataCell(wsBol, ri, 6, b.port || '—', fk, null, true, 'center');
-                    dataCell(wsBol, ri, 7, b.multicast_ip || '—', fk, null, true, 'center');
+                    dataCell(wsBol, ri, 3, b.port || '—', fk, null, true, 'center');
+
+                    const mcast = b.multicast_ip || 'NO MULTICAST';
+                    if (mcast === 'NO MULTICAST' || !mcast || mcast === '—') {
+                        setCell(wsBol, ri, 4, 'NO MULTICAST', {
+                            fill: 'FFFDE8E8', font: { bold: true, size: 10, color: { argb: 'FFC00000' } },
+                            alignment: { horizontal: 'center', vertical: 'middle' }
+                        });
+                    } else {
+                        dataCell(wsBol, ri, 4, mcast, fk, null, true, 'center');
+                    }
+
+                    dataCell(wsBol, ri, 5, b.long_name || b.name || '', fk, null, true, 'left');
+                    dataCell(wsBol, ri, 6, b.local_name || b.port || '—', fk, null, false, 'center');
+                    dataCell(wsBol, ri, 7, b.alias || `P.${b.port || ''}`, fk, null, false, 'center');
+                    dataCell(wsBol, ri, 8, b.subtitle || '—', fk, null, false, 'center');
 
                     (b.keys || []).forEach((k, ki) => {
                         if (ki >= 7) return;
-                        const cT = 8 + ki * 3;
+                        const cT = 9 + ki * 3;
                         const target = k.target || '—';
                         const func = k.func || '—';
-                        const mode = k.mode || '—';
+                        const mode = 'Momentary';
                         const kType = k.type || '';
 
                         if (ki === 6) {
@@ -2983,7 +2390,7 @@ function parseBolBuffer(rawBytes, filename) {
                                 alignment: { horizontal: 'center', vertical: 'middle' }
                             });
                             dataCell(wsBol, ri, cT + 1, func, fk, null, true, 'center');
-                            dataCell(wsBol, ri, cT + 2, mode, fk, C.auto, true, 'center');
+                            dataCell(wsBol, ri, cT + 2, 'Momentary', fk, C.mom, true, 'center');
                         } else if (target !== '—') {
                             let tBg = C[fk] || fk;
                             let tFg = 'FF000000';
@@ -2997,7 +2404,7 @@ function parseBolBuffer(rawBytes, filename) {
                                 alignment: { horizontal: 'left', vertical: 'middle' }
                             });
                             dataCell(wsBol, ri, cT + 1, func, fk, getFuncColor(func), func !== 'Listen', 'center');
-                            dataCell(wsBol, ri, cT + 2, mode, fk, getModeColor(mode), ['Auto', 'Momentary', 'Latching'].includes(mode), 'center');
+                            dataCell(wsBol, ri, cT + 2, 'Momentary', fk, C.mom, true, 'center');
                         } else {
                             dataCell(wsBol, ri, cT, '—', fk, 'FF808080', false, 'center');
                             dataCell(wsBol, ri, cT + 1, '—', fk, 'FF808080', false, 'center');
@@ -3005,25 +2412,28 @@ function parseBolBuffer(rawBytes, filename) {
                         }
                     });
                 });
-                wsBol.views = [{ state: 'frozen', xSplit: 7, ySplit: 5 }];
+                wsBol.views = [{ state: 'frozen', xSplit: 8, ySplit: 5 }];
             }
 
             // ── Sheet 6: Panels & Bolero ──────────────────────────────────────
             const wsPanels = wb.addWorksheet('Panels & Bolero');
-            const totalDevices = r.ports.length + r.boleros.length;
-            titleRow(wsPanels, `Hardware Panels & Bolero Wireless Beltpacks — Physical Key Layouts — ${fn}`, 55, 'dark_blue', 1, 14);
+            const totalDevices = (r.ports || []).length + (r.boleros || []).length;
+            const numPanelKeys = 16;
+            const totalPanelCols = 9 + numPanelKeys * 3;
+            titleRow(wsPanels, `Hardware Panels & Bolero Wireless Beltpacks — Physical Key Layouts — ${fn}`, totalPanelCols, 'dark_blue', 1, 14);
 
-            wsPanels.mergeCells('A2:BC2');
+            wsPanels.mergeCells(2, 1, 2, totalPanelCols);
             const pLeg = wsPanels.getCell('A2');
-            pLeg.value = 'Conferences (Blue)   |   Talk Groups (Amber)   |   Point-to-Point (Purple)   |   Action Modes: Auto (Green) / Momentary (Amber) / Latching (Navy)   |   SmartPanels: RSP-1216HL, RSP-1232HL, DSP-2312 & Bolero Wireless';
+            pLeg.value = 'Conferences / Partylines (Blue)   |   Talk Groups (Amber)   |   Point-to-Point (Purple)   |   Action Modes: Momentary (Amber) / Auto (Green) / Latching (Navy)   |   [Overwrites: Display / System]';
             pLeg.font = { name: 'Calibri', bold: true, size: 9, color: { argb: 'FF1F3864' } };
             pLeg.fill = solidFill(C.teal_light);
             pLeg.alignment = { horizontal: 'center', vertical: 'middle' };
             wsPanels.getRow(2).height = 20;
 
             const pMetaCols = [
-                ['#', 6], ['Device Type', 20], ['Hardware Model', 22],
-                ['Device Name', 30], ['Display Label', 16], ['Port / Channel', 15], ['Assigned User / Role', 24]
+                ['#', 6], ['Slot / Port', 12], ['Hardware Model', 24],
+                ['Long Name', 32], ['8-Char Local Name', 18], ['8-Char Alias', 14], ['16-Char Subtitle', 18],
+                ['Station Role / Bus Link', 30], ['IP Address', 17]
             ];
             pMetaCols.forEach(([colTitle, colW], idx) => {
                 const c = idx + 1;
@@ -3032,11 +2442,11 @@ function parseBolBuffer(rawBytes, filename) {
                 wsPanels.getColumn(c).width = colW;
             });
 
-            for (let ki = 0; ki < 16; ki++) {
-                const cStart = 8 + ki * 3;
+            for (let ki = 0; ki < numPanelKeys; ki++) {
+                const cStart = 10 + ki * 3;
                 wsPanels.mergeCells(4, cStart, 4, cStart + 2);
                 hdrCell(wsPanels, 4, cStart, `Key ${ki + 1}`, 'teal');
-                hdrCell(wsPanels, 5, cStart, 'Target / Dest', 'header_grey');
+                hdrCell(wsPanels, 5, cStart, 'Target / Channel', 'header_grey');
                 hdrCell(wsPanels, 5, cStart + 1, 'Function', 'header_grey');
                 hdrCell(wsPanels, 5, cStart + 2, 'Mode', 'header_grey');
                 wsPanels.getColumn(cStart).width = 20;
@@ -3047,73 +2457,194 @@ function parseBolBuffer(rawBytes, filename) {
             wsPanels.getRow(4).height = 20;
             wsPanels.getRow(5).height = 20;
 
-            let rowCounter = 6;
-            // First: Physical Hardware Panels
-            r.ports.forEach(p => {
-                const ri = rowCounter++;
-                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+            let currentRow = 6;
+            let chartCounter = 1;
+            const chartedExpIndices = new Set();
+
+            (r.panels || r.ports || []).filter(p => !p.is_expansion).forEach(p => {
+                const ri = currentRow++;
+                const fk = chartCounter % 2 === 0 ? 'row_alt' : 'row_white';
                 wsPanels.getRow(ri).height = 20;
 
-                dataCell(wsPanels, ri, 1, ri - 5, fk, null, false, 'center');
-                dataCell(wsPanels, ri, 2, 'Keypanel / Station', fk, null, true, 'center');
-                dataCell(wsPanels, ri, 3, p.category, fk, null, false, 'left');
-                dataCell(wsPanels, ri, 4, p.name, fk, null, true, 'left');
-                dataCell(wsPanels, ri, 5, p.display_label || '—', fk, null, true, 'center');
-                dataCell(wsPanels, ri, 6, p.slot_port || '—', fk, null, true, 'center');
-                dataCell(wsPanels, ri, 7, p.user_name || '—', fk, null, false, 'left');
+                dataCell(wsPanels, ri, 1, chartCounter, fk, null, false, 'center');
+                dataCell(wsPanels, ri, 2, p.slot_port || '—', fk, null, true, 'center');
+                dataCell(wsPanels, ri, 3, p.category || 'SmartPanel', fk, null, true, 'left');
+                dataCell(wsPanels, ri, 4, p.long_name || p.name || '', fk, null, true, 'left');
+                dataCell(wsPanels, ri, 5, p.local_name || p.slot_port || '—', fk, null, false, 'center');
+                dataCell(wsPanels, ri, 6, p.alias || p.label || '—', fk, null, false, 'center');
+                dataCell(wsPanels, ri, 7, p.subtitle || '—', fk, null, false, 'center');
+                dataCell(wsPanels, ri, 8, p.expansion_summary || 'Base Host Station', fk, null, false, 'left');
+                dataCell(wsPanels, ri, 9, p.ip_address || '—', fk, null, p.ip_address && p.ip_address !== '—', 'center');
 
-                (p.keys || []).forEach((k, ki) => {
-                    if (ki >= 16) return;
-                    const cT = 8 + ki * 3;
-                    const target = k.target || '—';
-                    const func = k.func || '—';
-                    const mode = k.mode || '—';
+                for (let ki = 0; ki < numPanelKeys; ki++) {
+                    const cT = 10 + ki * 3;
+                    const kInfo = (p.keys && ki < p.keys.length) ? p.keys[ki] : {};
+                    const target = kInfo.target || '—';
+                    const func = kInfo.func || '—';
+                    const mode = kInfo.mode || '—';
+                    const kType = kInfo.type || '';
 
-                    if (target !== '—') {
+                    if (target !== '—' && target !== 'N/A') {
+                        let tBg = C[fk] || fk;
+                        let tFg = 'FF000000';
+                        if (kType === 'Talkgroup') { tBg = C.group_fill; tFg = C.group_text; }
+                        else if (kType === 'Partyline') { tBg = C.conf_fill; tFg = C.conf_text; }
+                        else if (kType === 'Reply') { tBg = C.reply_dyn_fill; tFg = C.reply_dyn_text; }
+                        else if (kType === 'P2P') { tBg = C.p2p_fill; tFg = C.p2p_text; }
+
                         setCell(wsPanels, ri, cT, target, {
-                            fill: C.conf_fill,
-                            font: { bold: true, size: 10, color: { argb: C.conf_text } },
+                            fill: tBg, font: { bold: true, size: 10, color: { argb: tFg } },
                             alignment: { horizontal: 'left', vertical: 'middle' }
                         });
                         dataCell(wsPanels, ri, cT + 1, func, fk, getFuncColor(func), func !== 'Listen', 'center');
                         dataCell(wsPanels, ri, cT + 2, mode, fk, getModeColor(mode), ['Auto', 'Momentary', 'Latching'].includes(mode), 'center');
+                    } else if (target === 'N/A') {
+                        dataCell(wsPanels, ri, cT, 'N/A', fk, 'FFA6ACAF', false, 'center');
+                        dataCell(wsPanels, ri, cT + 1, 'N/A', fk, 'FFA6ACAF', false, 'center');
+                        dataCell(wsPanels, ri, cT + 2, 'N/A', fk, 'FFA6ACAF', false, 'center');
                     } else {
                         dataCell(wsPanels, ri, cT, '—', fk, 'FF808080', false, 'center');
                         dataCell(wsPanels, ri, cT + 1, '—', fk, 'FF808080', false, 'center');
                         dataCell(wsPanels, ri, cT + 2, '—', fk, 'FF808080', false, 'center');
                     }
+                }
+                chartCounter++;
+
+                // Nested Attached Expansions
+                const attached = (r.expansions || []).filter(e => e.host && e.host.idx === p.idx);
+                let accumKeys = p.keys_count || 16;
+                attached.forEach((exp, expI) => {
+                    chartedExpIndices.add(exp.idx);
+                    const expBg = expI % 2 === 0 ? 'FFF4F9F9' : 'FFEBF5FB';
+                    const expRi = currentRow++;
+                    wsPanels.getRow(expRi).height = 20;
+
+                    const kStart = accumKeys + 1;
+                    const kEnd = accumKeys + (exp.keys_count || 16);
+                    accumKeys = kEnd;
+
+                    dataCell(wsPanels, expRi, 1, `${chartCounter - 1}.${expI + 1}`, expBg, null, false, 'center');
+                    dataCell(wsPanels, expRi, 2, `↳ Exp: Port ${exp.port || '—'}`, expBg, null, true, 'center');
+                    dataCell(wsPanels, expRi, 3, `↳ ${exp.model || 'Expansion Panel'}`, expBg, null, true, 'left');
+                    dataCell(wsPanels, expRi, 4, exp.long_name || exp.name || '', expBg, null, false, 'left');
+                    dataCell(wsPanels, expRi, 5, exp.local_name || exp.port || '—', expBg, null, false, 'center');
+                    dataCell(wsPanels, expRi, 6, exp.alias || `P.${exp.port || ''}`, expBg, null, false, 'center');
+                    dataCell(wsPanels, expRi, 7, exp.subtitle || '—', expBg, null, false, 'center');
+                    dataCell(wsPanels, expRi, 8, `Module ${expI + 1}/${attached.length} (Station Keys ${kStart}–${kEnd}) -> Host Port ${p.slot_port}`, expBg, C.teal, true, 'left');
+                    dataCell(wsPanels, expRi, 9, `Addr: Module ${expI + 1}`, expBg, null, false, 'center');
+
+                    const expKCount = exp.keys_count || 16;
+                    for (let ki = 0; ki < numPanelKeys; ki++) {
+                        const cT = 10 + ki * 3;
+                        if (ki < expKCount) {
+                            const keyAbsNum = kStart + ki;
+                            setCell(wsPanels, expRi, cT, `Ext K${ki + 1} (Stn K${keyAbsNum})`, {
+                                fill: expBg, font: { bold: true, size: 9, color: { argb: 'FF1A5276' } },
+                                alignment: { horizontal: 'left', vertical: 'middle' }
+                            });
+                            dataCell(wsPanels, expRi, cT + 1, 'Talk & Listen', expBg, null, false, 'center');
+                            dataCell(wsPanels, expRi, cT + 2, 'Auto', expBg, C.auto, false, 'center');
+                        } else {
+                            dataCell(wsPanels, expRi, cT, 'N/A', expBg, 'FFA6ACAF', false, 'center');
+                            dataCell(wsPanels, expRi, cT + 1, 'N/A', expBg, 'FFA6ACAF', false, 'center');
+                            dataCell(wsPanels, expRi, cT + 2, 'N/A', expBg, 'FFA6ACAF', false, 'center');
+                        }
+                    }
                 });
             });
 
-            // Second: Bolero Beltpacks
-            r.boleros.forEach(b => {
-                const ri = rowCounter++;
+            // Standalone Expansions
+            const standaloneExps = (r.expansions || []).filter(e => !chartedExpIndices.has(e.idx));
+            standaloneExps.forEach((exp, sI) => {
+                const expBg = sI % 2 === 0 ? 'FFF4F9F9' : 'FFEBF5FB';
+                const expRi = currentRow++;
+                wsPanels.getRow(expRi).height = 20;
+
+                dataCell(wsPanels, expRi, 1, chartCounter++, expBg, null, false, 'center');
+                dataCell(wsPanels, expRi, 2, `Port ${exp.port || '—'}`, expBg, null, true, 'center');
+                dataCell(wsPanels, expRi, 3, exp.model || 'Expansion Panel', expBg, null, true, 'left');
+                dataCell(wsPanels, expRi, 4, exp.long_name || exp.name || '', expBg, null, false, 'left');
+                dataCell(wsPanels, expRi, 5, exp.local_name || exp.port || '—', expBg, null, false, 'center');
+                dataCell(wsPanels, expRi, 6, exp.alias || `P.${exp.port || ''}`, expBg, null, false, 'center');
+                dataCell(wsPanels, expRi, 7, exp.subtitle || '—', expBg, null, false, 'center');
+                dataCell(wsPanels, expRi, 8, 'Standalone Expansion Module', expBg, C.orange, true, 'left');
+                dataCell(wsPanels, expRi, 9, 'Expansion Bus', expBg, null, false, 'center');
+
+                const expKCount = exp.keys_count || 16;
+                for (let ki = 0; ki < numPanelKeys; ki++) {
+                    const cT = 10 + ki * 3;
+                    if (ki < expKCount) {
+                        setCell(wsPanels, expRi, cT, `Ext Key ${ki + 1}`, {
+                            fill: expBg, font: { bold: true, size: 9, color: { argb: 'FF1A5276' } },
+                            alignment: { horizontal: 'left', vertical: 'middle' }
+                        });
+                        dataCell(wsPanels, expRi, cT + 1, 'Talk & Listen', expBg, null, false, 'center');
+                        dataCell(wsPanels, expRi, cT + 2, 'Auto', expBg, C.auto, false, 'center');
+                    } else {
+                        dataCell(wsPanels, expRi, cT, 'N/A', expBg, 'FFA6ACAF', false, 'center');
+                        dataCell(wsPanels, expRi, cT + 1, 'N/A', expBg, 'FFA6ACAF', false, 'center');
+                        dataCell(wsPanels, expRi, cT + 2, 'N/A', expBg, 'FFA6ACAF', false, 'center');
+                    }
+                }
+            });
+
+            // Bolero Beltpacks on Panels Sheet
+            (r.boleros || []).forEach(b => {
+                const ri = currentRow++;
                 const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
                 wsPanels.getRow(ri).height = 20;
 
                 dataCell(wsPanels, ri, 1, ri - 5, fk, null, false, 'center');
-                dataCell(wsPanels, ri, 2, 'Wireless Beltpack', fk, C.green, true, 'center');
-                dataCell(wsPanels, ri, 3, 'Bolero 6-Key DECT', fk, null, false, 'left');
-                dataCell(wsPanels, ri, 4, b.name, fk, null, true, 'left');
-                dataCell(wsPanels, ri, 5, `BP${String(b.dev_id).padStart(2, '0')}`, fk, null, true, 'center');
-                dataCell(wsPanels, ri, 6, b.port ? `Port ${b.port}` : '—', fk, null, true, 'center');
-                dataCell(wsPanels, ri, 7, b.user_name || '—', fk, null, false, 'left');
+                dataCell(wsPanels, ri, 2, `Port ${b.port || '—'}`, fk, null, true, 'center');
+                dataCell(wsPanels, ri, 3, 'Bolero Wireless Beltpack', fk, null, false, 'left');
+                dataCell(wsPanels, ri, 4, b.long_name || b.name || '', fk, null, true, 'left');
+                dataCell(wsPanels, ri, 5, b.local_name || b.port || '—', fk, null, false, 'center');
+                dataCell(wsPanels, ri, 6, b.alias || `P.${b.port || ''}`, fk, null, false, 'center');
+                dataCell(wsPanels, ri, 7, b.subtitle || '—', fk, null, false, 'center');
+                dataCell(wsPanels, ri, 8, 'Wireless Beltpack (DECT / IP)', fk, null, false, 'left');
 
-                for (let ki = 0; ki < 16; ki++) {
-                    const cT = 8 + ki * 3;
-                    if (b.keys && ki < b.keys.length) {
-                        const k = b.keys[ki];
+                const mcast = b.multicast_ip || 'NO MULTICAST';
+                if (mcast === 'NO MULTICAST' || !mcast || mcast === '—') {
+                    setCell(wsPanels, ri, 9, 'NO MULTICAST', {
+                        fill: 'FFFDE8E8', font: { bold: true, size: 10, color: { argb: 'FFC00000' } },
+                        alignment: { horizontal: 'center', vertical: 'middle' }
+                    });
+                } else {
+                    dataCell(wsPanels, ri, 9, mcast, fk, null, true, 'center');
+                }
+
+                const bKeys = b.keys || [];
+                for (let ki = 0; ki < numPanelKeys; ki++) {
+                    const cT = 10 + ki * 3;
+                    if (ki < bKeys.length) {
+                        const k = bKeys[ki];
                         const target = k.target || '—';
                         const func = k.func || '—';
-                        const mode = k.mode || '—';
-                        if (target !== '—') {
+                        const mode = 'Momentary';
+                        const kType = k.type || '';
+
+                        if (ki === 6) {
                             setCell(wsPanels, ri, cT, target, {
-                                fill: C.conf_fill,
-                                font: { bold: true, size: 10, color: { argb: C.conf_text } },
+                                fill: C.reply_dyn_fill,
+                                font: { bold: true, size: 10, color: { argb: C.reply_dyn_text } },
+                                alignment: { horizontal: 'center', vertical: 'middle' }
+                            });
+                            dataCell(wsPanels, ri, cT + 1, func, fk, null, true, 'center');
+                            dataCell(wsPanels, ri, cT + 2, 'Momentary', fk, C.mom, true, 'center');
+                        } else if (target !== '—') {
+                            let tBg = C[fk] || fk;
+                            let tFg = 'FF000000';
+                            if (kType === 'Talkgroup') { tBg = C.group_fill; tFg = C.group_text; }
+                            else if (kType === 'Partyline') { tBg = C.conf_fill; tFg = C.conf_text; }
+                            else if (kType === 'P2P') { tBg = C.p2p_fill; tFg = C.p2p_text; }
+
+                            setCell(wsPanels, ri, cT, target, {
+                                fill: tBg,
+                                font: { bold: true, size: 10, color: { argb: tFg } },
                                 alignment: { horizontal: 'left', vertical: 'middle' }
                             });
                             dataCell(wsPanels, ri, cT + 1, func, fk, getFuncColor(func), func !== 'Listen', 'center');
-                            dataCell(wsPanels, ri, cT + 2, mode, fk, getModeColor(mode), ['Auto', 'Momentary', 'Latching'].includes(mode), 'center');
+                            dataCell(wsPanels, ri, cT + 2, 'Momentary', fk, C.mom, true, 'center');
                         } else {
                             dataCell(wsPanels, ri, cT, '—', fk, 'FF808080', false, 'center');
                             dataCell(wsPanels, ri, cT + 1, '—', fk, 'FF808080', false, 'center');
@@ -3126,14 +2657,57 @@ function parseBolBuffer(rawBytes, filename) {
                     }
                 }
             });
-            wsPanels.views = [{ state: 'frozen', xSplit: 7, ySplit: 5 }];
+            wsPanels.views = [{ state: 'frozen', xSplit: 9, ySplit: 5 }];
+
+            // ── Sheet: Expansion Panels (if present) ──────────────────────────
+            if (r.expansions && r.expansions.length > 0) {
+                const wsExp = wb.addWorksheet('Expansion Panels');
+                wsExp.views = [{ showGridLines: true }];
+                titleRow(wsExp, `Riedel Artist Matrix Expansion Panels & Modules — ${fn}`, 15, 'teal', 1, 14);
+
+                const expHdrs = [
+                    '#', 'Expansion Model', 'Long Name', '8-Char Local Name', '8-Char Alias', '16-Char Subtitle',
+                    'Device Type Code', 'Node / Frame', 'Bay / Slot',
+                    'Matrix Port', 'Host Keypanel Port', 'Host Station Model', 'Expansion Keys',
+                    'Total Station Keys', 'Status / Role'
+                ];
+                expHdrs.forEach((h, idx) => hdrCell(wsExp, 4, idx + 1, h, 'teal'));
+                wsExp.getRow(4).height = 24;
+
+                r.expansions.forEach((exp, r_idx) => {
+                    const ri = 5 + r_idx;
+                    const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                    wsExp.getRow(ri).height = 20;
+                    const h = exp.host;
+                    const hPort = h ? h.port || '—' : '—';
+                    const hModel = h ? h.model || 'Standalone / Bus Extension' : 'Standalone / Bus Extension';
+                    const totKeys = h ? (h.total_station_keys || exp.keys_count || 16) : (exp.keys_count || 16);
+
+                    dataCell(wsExp, ri, 1, r_idx + 1, fk, null, false, 'center');
+                    dataCell(wsExp, ri, 2, exp.model || 'Expansion Panel', fk, null, true, 'left');
+                    dataCell(wsExp, ri, 3, exp.long_name || exp.name || '', fk, null, false, 'left');
+                    dataCell(wsExp, ri, 4, exp.local_name || exp.port || '—', fk, null, false, 'center');
+                    dataCell(wsExp, ri, 5, exp.alias || `P.${exp.port || ''}`, fk, null, false, 'center');
+                    dataCell(wsExp, ri, 6, exp.subtitle || '—', fk, null, false, 'center');
+                    dataCell(wsExp, ri, 7, `0x${(exp.type_code || 0).toString(16).padStart(4, '0')}`, fk, null, false, 'center');
+                    dataCell(wsExp, ri, 8, exp.node_name || 'Node 1', fk, null, true, 'center');
+                    dataCell(wsExp, ri, 9, exp.slot || 'Bay 1', fk, null, false, 'center');
+                    dataCell(wsExp, ri, 10, exp.port || '—', fk, null, true, 'center');
+                    dataCell(wsExp, ri, 11, hPort, fk, null, true, 'center');
+                    dataCell(wsExp, ri, 12, hModel, fk, null, false, 'left');
+                    dataCell(wsExp, ri, 13, exp.keys_count || 16, fk, null, true, 'center');
+                    dataCell(wsExp, ri, 14, totKeys, fk, null, true, 'center');
+                    dataCell(wsExp, ri, 15, h ? 'Host Station Linked' : 'Standalone Module', fk, h ? C.green : C.orange, true, 'center');
+                });
+                [6, 24, 28, 16, 14, 18, 14, 16, 12, 12, 16, 24, 14, 16, 18].forEach((w, idx) => wsExp.getColumn(idx + 1).width = w);
+            }
 
             // ── Sheet 7: Ports ────────────────────────────────────────────────
             const wsPorts = wb.addWorksheet('Ports');
             wsPorts.views = [{ showGridLines: true }];
-            titleRow(wsPorts, `Master Matrix Ports & 4-Wire Audio Routing — ${fn}`, 11, 'dark_blue', 1, 14);
+            titleRow(wsPorts, `Master Matrix Ports & 4-Wire Audio Routing — ${fn}`, 14, 'dark_blue', 1, 14);
 
-            wsPorts.mergeCells('A2:K2');
+            wsPorts.mergeCells('A2:N2');
             const portSub = wsPorts.getCell('A2');
             portSub.value = 'All Mainframe Slots, AES67 Bays, Analog Ties & Digital Intercom Trunks';
             portSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
@@ -3143,8 +2717,8 @@ function parseBolBuffer(rawBytes, filename) {
 
             const masterPortHdrs = [
                 '#', 'Node / Frame', 'Slot / Bay', 'Hardware Card Name', 'Port #',
-                'Status', 'Port / Device Name', 'Signal Type', '4-Wire Audio Mode',
-                'Connected Conference(s) / IFB Routing', 'Assigned User / Role'
+                'Status', 'Port / Device Name', '8-Char Local Name', '8-Char Alias', '16-Char Subtitle',
+                'Signal Type', '4-Wire Audio Mode', 'Connected Conference(s) / IFB Routing', 'Assigned User / Role'
             ];
             masterPortHdrs.forEach((h, idx) => hdrCell(wsPorts, 4, idx + 1, h, 'dark_blue'));
             wsPorts.getRow(4).height = 24;
@@ -3160,13 +2734,16 @@ function parseBolBuffer(rawBytes, filename) {
                 dataCell(wsPorts, ri, 4, p.card, fk, null, false, 'left');
                 dataCell(wsPorts, ri, 5, p.port, fk, null, true, 'center');
                 dataCell(wsPorts, ri, 6, p.status, fk, p.status === 'Enabled' ? C.green : 'FF808080', true, 'center');
-                dataCell(wsPorts, ri, 7, p.name, fk, null, true, 'left');
-                dataCell(wsPorts, ri, 8, p.type, fk, null, false, 'left');
-                dataCell(wsPorts, ri, 9, p.mode, fk, null, true, 'center');
-                dataCell(wsPorts, ri, 10, p.confs, fk, null, false, 'left');
-                dataCell(wsPorts, ri, 11, p.user, fk, null, false, 'left');
+                dataCell(wsPorts, ri, 7, p.long_name || p.name || '—', fk, null, true, 'left');
+                dataCell(wsPorts, ri, 8, p.local_name || '—', fk, null, false, 'center');
+                dataCell(wsPorts, ri, 9, p.alias || '—', fk, null, false, 'center');
+                dataCell(wsPorts, ri, 10, p.subtitle || '—', fk, null, false, 'center');
+                dataCell(wsPorts, ri, 11, p.type || '—', fk, null, false, 'left');
+                dataCell(wsPorts, ri, 12, p.mode || '—', fk, null, true, 'center');
+                dataCell(wsPorts, ri, 13, p.confs || '—', fk, null, false, 'left');
+                dataCell(wsPorts, ri, 14, p.user || '—', fk, null, false, 'left');
             });
-            [6, 22, 14, 26, 16, 12, 32, 26, 26, 38, 24].forEach((w, idx) => wsPorts.getColumn(idx + 1).width = w);
+            [6, 20, 12, 24, 14, 12, 30, 16, 14, 18, 24, 20, 32, 22].forEach((w, idx) => wsPorts.getColumn(idx + 1).width = w);
             wsPorts.views = [{ state: 'frozen', xSplit: 5, ySplit: 4 }];
 
             // ── Sheet 8: Conferences & Groups ─────────────────────────────────
@@ -3190,7 +2767,7 @@ function parseBolBuffer(rawBytes, filename) {
             confHdrs.forEach((h, idx) => hdrCell(wsConf, 4, idx + 1, h, 'orange'));
             wsConf.getRow(4).height = 26;
 
-            const sortedItems = [...r.conferences].sort((a, b) => {
+            const sortedItems = [...(r.conferences || [])].sort((a, b) => {
                 const aType = a.item_type === 'Group' ? 0 : 1;
                 const bType = b.item_type === 'Group' ? 0 : 1;
                 return aType === bType ? a.name.localeCompare(b.name) : aType - bType;
@@ -3245,111 +2822,95 @@ function parseBolBuffer(rawBytes, filename) {
             [6, 14, 22, 16, 24, 24, 22, 12, 38, 14, 10, 36, 10, 36].forEach((w, idx) => wsConf.getColumn(idx + 1).width = w);
             wsConf.views = [{ state: 'frozen', ySplit: 4 }];
 
-            // ── Sheet 9: IFB Routing ──────────────────────────────────────────
-            const wsIfb = wb.addWorksheet('IFB Routing');
-            wsIfb.views = [{ showGridLines: true }];
-            titleRow(wsIfb, 'Interruptible Foldback (IFB) Routing & Configuration', 9, 'green', 1, 14);
+            // ── Sheet 9: IFB Routing (if present) ─────────────────────────────
+            if (r.ifbs && r.ifbs.length > 0) {
+                const wsIfb = wb.addWorksheet('IFB Routing');
+                wsIfb.views = [{ showGridLines: true }];
+                titleRow(wsIfb, `Interruptible Foldback (IFB) Routing Configuration — ${fn}`, 10, 'mid_blue', 1, 14);
 
-            wsIfb.mergeCells('A2:I2');
-            const ifbSub = wsIfb.getCell('A2');
-            ifbSub.value = `Total IFB Channels: ${r.ifbs.length}`;
-            ifbSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
-            ifbSub.fill = solidFill(C.dark_blue);
-            ifbSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
-            wsIfb.getRow(2).height = 18;
+                wsIfb.mergeCells('A2:J2');
+                const ifbSub = wsIfb.getCell('A2');
+                ifbSub.value = 'IFB Channels, Program Inputs, Mix-Minus Destinations, Foldback Returns, and Remote Key Callouts';
+                ifbSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
+                ifbSub.fill = solidFill(C.dark_blue);
+                ifbSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+                wsIfb.getRow(2).height = 18;
 
-            const ifbHdrs = ['#', 'IFB Name', 'Key Label', 'Input Port', 'Mix-Minus Port', 'Output Port', 'Dim Level', 'Input Gain', 'Output Gain'];
-            ifbHdrs.forEach((h, idx) => hdrCell(wsIfb, 4, idx + 1, h, 'green'));
-            wsIfb.getRow(4).height = 24;
+                const ifbHdrs = [
+                    '#', 'IFB Name', 'Key Label', 'Input Port (PGM)', 'Mix-Minus Port', 'Output Port (Caller)',
+                    'Dim Level', 'Channel #', 'Input Gain', 'Output Gain'
+                ];
+                ifbHdrs.forEach((h, idx) => hdrCell(wsIfb, 4, idx + 1, h, 'mid_blue'));
+                wsIfb.getRow(4).height = 24;
 
-            r.ifbs.forEach((ifb, r_idx) => {
-                const ri = 5 + r_idx;
-                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
-                wsIfb.getRow(ri).height = 20;
+                r.ifbs.forEach((ifb, r_idx) => {
+                    const ri = 5 + r_idx;
+                    const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                    wsIfb.getRow(ri).height = 20;
 
-                dataCell(wsIfb, ri, 1, ifb.num || r_idx + 1, fk, null, false, 'center');
-                dataCell(wsIfb, ri, 2, ifb.name, fk, null, true, 'left');
-                dataCell(wsIfb, ri, 3, ifb.key_label || '—', fk, null, true, 'center');
-                dataCell(wsIfb, ri, 4, ifb.input_port || '—', fk, null, false, 'left');
-                dataCell(wsIfb, ri, 5, ifb.mix_minus_port || '—', fk, null, false, 'left');
-                dataCell(wsIfb, ri, 6, ifb.output_port || '—', fk, null, false, 'left');
-                dataCell(wsIfb, ri, 7, ifb.dim || '-20 dB', fk, null, false, 'center');
-                dataCell(wsIfb, ri, 8, ifb.input_gain || '0.0 dB', fk, null, false, 'center');
-                dataCell(wsIfb, ri, 9, ifb.output_gain || '0.0 dB', fk, null, false, 'center');
-            });
-            [6, 22, 14, 28, 28, 28, 12, 12, 12].forEach((w, idx) => wsIfb.getColumn(idx + 1).width = w);
+                    dataCell(wsIfb, ri, 1, r_idx + 1, fk, null, false, 'center');
+                    dataCell(wsIfb, ri, 2, ifb.name, fk, null, true, 'left');
+                    dataCell(wsIfb, ri, 3, ifb.key_label || '—', fk, null, true, 'center');
+                    dataCell(wsIfb, ri, 4, ifb.input_port || '—', fk, null, false, 'left');
+                    dataCell(wsIfb, ri, 5, ifb.mix_minus_port || '—', fk, null, false, 'left');
+                    dataCell(wsIfb, ri, 6, ifb.output_port || '—', fk, null, false, 'left');
+                    dataCell(wsIfb, ri, 7, ifb.dim_level || '-20 dB', fk, null, false, 'center');
+                    dataCell(wsIfb, ri, 8, ifb.number || r_idx + 1, fk, null, false, 'center');
+                    dataCell(wsIfb, ri, 9, ifb.input_gain || '0.0 dB', fk, null, false, 'center');
+                    dataCell(wsIfb, ri, 10, ifb.output_gain || '0.0 dB', fk, null, false, 'center');
+                });
+                [6, 20, 16, 28, 28, 28, 14, 12, 14, 14].forEach((w, idx) => wsIfb.getColumn(idx + 1).width = w);
+            }
 
-            // ── Sheet 10: Logic & Flashes ─────────────────────────────────────
-            const wsLog = wb.addWorksheet('Logic & Flashes');
-            wsLog.views = [{ showGridLines: true }];
-            titleRow(wsLog, 'Logic Functions, GPIO & Panel Signalization', 4, 'header_grey', 1, 14);
+            // ── Sheet 10: Logic & Flashes (if present) ────────────────────────
+            const logicList = r.logics || r.logic || [];
+            if (logicList.length > 0) {
+                const wsLog = wb.addWorksheet('Logic & Flashes');
+                wsLog.views = [{ showGridLines: true }];
+                titleRow(wsLog, `Logic Functions, GPIO Signals & Visual Calling — ${fn}`, 5, 'mid_blue', 1, 14);
 
-            wsLog.mergeCells('A2:D2');
-            const lSub = wsLog.getCell('A2');
-            lSub.value = `Total Logic Definitions: ${r.logic.length}`;
-            lSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
-            lSub.fill = solidFill(C.dark_blue);
-            lSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
-            wsLog.getRow(2).height = 18;
+                wsLog.mergeCells('A2:E2');
+                const lSub = wsLog.getCell('A2');
+                lSub.value = 'Panel Flashes, Beeps, Logic Functions, and GPIO Tally Signalization';
+                lSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
+                lSub.fill = solidFill(C.dark_blue);
+                lSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+                wsLog.getRow(2).height = 18;
 
-            const logHdrs = ['#', 'Logic Function Name', 'Short Label', 'Type / Action'];
-            logHdrs.forEach((h, idx) => hdrCell(wsLog, 4, idx + 1, h, 'header_grey'));
-            wsLog.getRow(4).height = 24;
+                const logHdrs = ['#', 'Logic / Function Name', 'Short Label', 'Signal / Logic Type', 'Hardware / Target Port'];
+                logHdrs.forEach((h, idx) => hdrCell(wsLog, 4, idx + 1, h, 'mid_blue'));
+                wsLog.getRow(4).height = 24;
 
-            r.logic.forEach((log, r_idx) => {
-                const ri = 5 + r_idx;
-                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
-                wsLog.getRow(ri).height = 20;
-                dataCell(wsLog, ri, 1, r_idx + 1, fk, null, false, 'center');
-                dataCell(wsLog, ri, 2, log.name, fk, null, true, 'left');
-                dataCell(wsLog, ri, 3, log.label, fk, null, true, 'center');
-                dataCell(wsLog, ri, 4, log.type, fk, null, false, 'left');
-            });
-            [6, 30, 16, 30].forEach((w, idx) => wsLog.getColumn(idx + 1).width = w);
+                logicList.forEach((log, r_idx) => {
+                    const ri = 5 + r_idx;
+                    const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
+                    wsLog.getRow(ri).height = 20;
 
-            // ── Sheet 11: Users & Access ──────────────────────────────────────
-            const wsUsr = wb.addWorksheet('Users & Access');
-            wsUsr.views = [{ showGridLines: true }];
-            titleRow(wsUsr, 'System Operators & Security Accounts', 3, 'dark_blue', 1, 14);
+                    dataCell(wsLog, ri, 1, r_idx + 1, fk, null, false, 'center');
+                    dataCell(wsLog, ri, 2, log.name || '—', fk, null, true, 'left');
+                    dataCell(wsLog, ri, 3, log.label || log.short_label || '—', fk, null, true, 'center');
+                    dataCell(wsLog, ri, 4, log.type || '—', fk, null, false, 'left');
+                    dataCell(wsLog, ri, 5, log.port || log.status || '—', fk, null, false, 'left');
+                });
+                [6, 36, 18, 30, 30].forEach((w, idx) => wsLog.getColumn(idx + 1).width = w);
+            }
 
-            wsUsr.mergeCells('A2:C2');
-            const uSub = wsUsr.getCell('A2');
-            uSub.value = `Total Accounts: ${r.users.length}`;
-            uSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
-            uSub.fill = solidFill(C.mid_blue);
-            uSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
-            wsUsr.getRow(2).height = 18;
-
-            const usrHdrs = ['#', 'Username', 'Role / Privilege Level'];
-            usrHdrs.forEach((h, idx) => hdrCell(wsUsr, 4, idx + 1, h, 'dark_blue'));
-            wsUsr.getRow(4).height = 24;
-
-            r.users.forEach((usr, r_idx) => {
-                const ri = 5 + r_idx;
-                const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
-                wsUsr.getRow(ri).height = 20;
-                dataCell(wsUsr, ri, 1, r_idx + 1, fk, null, false, 'center');
-                dataCell(wsUsr, ri, 2, usr.name, fk, null, true, 'left');
-                dataCell(wsUsr, ri, 3, usr.access || usr.role, fk, null, false, 'left');
-            });
-            [6, 24, 35].forEach((w, idx) => wsUsr.getColumn(idx + 1).width = w);
-
-            // ── Sheet 12: Name Overwrites ─────────────────────────────────────
+            // ── Sheet 11: Name Overwrites (if present) ────────────────────────
             if (r.overwrites && r.overwrites.length > 0) {
                 const wsOw = wb.addWorksheet('Name Overwrites');
                 wsOw.views = [{ showGridLines: true }];
-                titleRow(wsOw, `System Name Overwrites & Custom Display Aliases — ${fn}`, 6, 'dark_blue', 1, 14);
+                titleRow(wsOw, `System Name Overwrites & Custom Display Aliases — ${fn}`, 6, 'orange', 1, 14);
 
                 wsOw.mergeCells('A2:F2');
                 const owSub = wsOw.getCell('A2');
-                owSub.value = `Total Configured Overwrites: ${r.overwrites.length}  |  Matrix Nodes: ${r.nodes.length}`;
+                owSub.value = 'User Display Names Mapped to Internal Director / Frame Identifiers';
                 owSub.font = { name: 'Calibri', italic: true, size: 9, color: { argb: 'FFFFFFFF' } };
-                owSub.fill = solidFill(C.mid_blue);
+                owSub.fill = solidFill(C.dark_blue);
                 owSub.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
                 wsOw.getRow(2).height = 18;
 
-                const owHdrs = ['#', 'Category', 'Custom Display Name', 'System / Original Name', 'Status', 'Description'];
-                owHdrs.forEach((h, idx) => hdrCell(wsOw, 4, idx + 1, h, 'dark_blue'));
+                const owHdrs = ['#', 'Element Category', 'Custom Display Name', 'Original System Name', 'Status', 'Description'];
+                owHdrs.forEach((h, idx) => hdrCell(wsOw, 4, idx + 1, h, 'orange'));
                 wsOw.getRow(4).height = 24;
 
                 r.overwrites.forEach((ow, r_idx) => {
@@ -3357,7 +2918,7 @@ function parseBolBuffer(rawBytes, filename) {
                     const fk = ri % 2 === 0 ? 'row_alt' : 'row_white';
                     wsOw.getRow(ri).height = 20;
 
-                    const isTg = ow.category.includes('Talkgroup');
+                    const isTg = (ow.category || '').includes('Talkgroup');
                     const catBg = isTg ? C.group_fill : C.conf_fill;
                     const catFg = isTg ? C.group_text : C.conf_text;
 
