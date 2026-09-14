@@ -1,9 +1,9 @@
 # Riedel Intercom Configuration Extractor
 ### Bolero Standalone & Riedel Artist Matrix Configuration Extractor
 
-A universal, standalone extraction tool for **Riedel Artist Matrix** configuration dumps (`.art` / `.Art`) and **Bolero Standalone** backup save files (`.bol`). Converts uncompressed binary configuration dumps into structured, professionally formatted, color-coded Microsoft Excel (`.xlsx`) workbooks.
+A universal, standalone extraction tool for **Riedel Artist Matrix** configuration dumps (`.art` / `.Art`) and **Bolero Standalone** backup save files (`.bol`). Converts uncompressed binary configuration dumps into structured, professionally formatted, color-coded Microsoft Excel (`.xlsx`) workbooks and comprehensive machine-readable JSON (`.json`) files.
 
-Designed for intercom engineers, communications leads, broadcast sound engineers, and audio systems technicians to instantly audit, document, print, and cross-reference intercom show configurations.
+Designed for intercom engineers, communications leads, broadcast sound engineers, and audio systems technicians to instantly audit, document, print, cross-reference, and programmatically query intercom show configurations.
 
 ---
 
@@ -32,7 +32,7 @@ Zero dependencies required. Built as a universal macOS application bundle.
 - **Usage:**
   1. Double-click `Bolero File Extractor.app`.
   2. Select any `.bol` or `.art` configuration file(s) via the native macOS file selector, or drag and drop files onto the application icon.
-  3. The application automatically detects the file type, extracts all parameters, creates a matching `.xlsx` workbook in the file's folder, and opens it in your spreadsheet viewer.
+  3. The application automatically detects the file type, extracts all parameters, creates matching `.xlsx` and optional `.json` files in the file's folder, and opens the workbook in your spreadsheet viewer.
 
 ### 2. Browser-Based Web Converter (`web_extractor.html`)
 Zero installation required. Runs directly in any web browser on macOS, Windows, Linux, or iPadOS.
@@ -41,18 +41,19 @@ Zero installation required. Runs directly in any web browser on macOS, Windows, 
   1. Open `web_extractor.html` in Safari, Chrome, Edge, or Firefox.
   2. Drag and drop any `.bol` or `.art` file(s) into the browser window.
   3. All binary decoding, zlib inflation, and spreadsheet generation execute 100% client-side via JavaScript. No data is sent over the internet or uploaded to any external server.
-  4. Click **Download Excel (.xlsx)** to save the generated workbook.
+  4. Click **Download Excel (.xlsx)** or **Download JSON (.json)** on any file card to save individual configurations.
+  5. When multiple files are processed, use **Download Combined Excel (.xlsx)** or **Download All JSON (.json)** to download complete batch archives.
 
 ### 3. Python CLI Tools (`art_extractor.py`, `bol_extractor.py`, `bol_gui.py`)
 For headless server environments, automated show deployments, and terminal pipelines.
 - **Requirements:** Python 3.9+ with `openpyxl`
 - **Usage:**
   ```bash
-  # Convert a Riedel Artist Matrix file:
-  python3 art_extractor.py "show_backup.art"
+  # Convert a Riedel Artist Matrix file to Excel and JSON:
+  python3 art_extractor.py "show_backup.art" --json
 
-  # Convert a Bolero Standalone backup file:
-  python3 bol_extractor.py -s "backup_config.bol"
+  # Convert a Bolero Standalone backup file to Excel and JSON:
+  python3 bol_extractor.py -s "backup_config.bol" --json
 
   # Process both formats interchangeably via GUI / script:
   python3 bol_gui.py "show_file.art" "show_file.bol"
