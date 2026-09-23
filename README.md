@@ -24,6 +24,24 @@ Native zlib payload decompression and structure decoding for standalone antenna-
 
 ---
 
+## File Version Detection & Approved Versions (Web Converter)
+
+Every file is fingerprinted before it is parsed, and the result is shown on the file card, in the Excel **Summary** sheet, and in the JSON `format_info` object.
+
+| Format | Where the version lives | Fingerprint |
+|---|---|---|
+| Artist `.art` | Header: UTF-16LE `R2000 Cfg-File`, u32 schema revision at `0x20`, then a length-prefixed `Director version X.Y.Dn-B.hash` string | Director build + schema revision (e.g. `8.9.D2-14` / `0x580`) |
+| Bolero `.bol` | Container byte at offset 2, then inside the zlib payload a u16 NetConfig version and a u16 version per section (network, partylines, profiles, beltpacks, antennas, …) | `container/netconfig/section versions` (e.g. `2/6/10.2.17.19.1.1.6.6.60000`) |
+
+- **Approved** fingerprints are listed in `APPROVED_VERSIONS` in `web_extractor.html`. Only builds that have been checked against real files are on the list.
+- **Unapproved** files still parse (Artist uses the nearest older rule set in `ARTIST_RULE_PROFILES`), but they are marked **Unverified** with a warning that the output might not be trusted. Bolero warnings name the section whose version changed.
+- **Non-configuration files** (for example a JSON export renamed to `.art`) are rejected instead of being parsed into empty sheets.
+- **To approve a new version:** load a real file, spot-check each sheet against Director or the Bolero web UI, then add its fingerprint to `APPROVED_VERSIONS`.
+
+Known version differences: Director 8.9 stores key assignments as `b8 03 ff 52` records; Director 8.6 does not. So on 8.6 files, Bolero beltpack keys are marked "Not decoded" rather than guessed.
+
+---
+
 ## Available Distributions
 
 ### 1. Standalone Native macOS Application (`.app`)
