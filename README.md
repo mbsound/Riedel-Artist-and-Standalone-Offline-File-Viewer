@@ -47,7 +47,7 @@ The parsers read these structures directly, with no show-specific values:
 | | Decoded | Not decoded yet (shown as "Not decoded", "—" or "inferred") |
 |---|---|---|
 | **Bolero** | Show name, partylines, profiles and their keys, beltpacks (hardware ID, user, beltpack ID, keys), P2P targets, named antennas, audio devices and channels, GPIO triggers, save date and network ID | Live RF / online status (a save file does not contain it), net masters |
-| **Artist** | Director version and schema, endpoints (name, alias, slot.port, type), panel and beltpack key labels and long names, conferences with member endpoints, dynamic conferences, trunk lines | Key talk/listen function and latching mode, conference talker/listener split, groups (talk groups), IFBs, node assignment when the port name does not include the node, frame models, controllers, PSUs, licences; card models are inferred from port types |
+| **Artist** | Director version and schema, endpoints (name, alias, slot.port, type), panel and beltpack key labels and long names, conferences with member endpoints, dynamic conferences, trunk lines, frame model (code 3 = Artist 32, 9 = Artist 1024; 4 and 5 unconfirmed) | Key talk/listen function and latching mode, conference talker/listener split, groups (talk groups), IFBs, node numbers (read from frame names), node assignment when the port name does not include the node, controllers, PSUs, licences; card models are inferred from port types |
 
 ---
 
