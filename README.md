@@ -33,12 +33,21 @@ Every file is fingerprinted before it is parsed, and the result is shown on the 
 | Artist `.art` | Header: UTF-16LE `R2000 Cfg-File`, u32 schema revision at `0x20`, then a length-prefixed `Director version X.Y.Dn-B.hash` string | Director build + schema revision (e.g. `8.9.D2-14` / `0x580`) |
 | Bolero `.bol` | Container byte at offset 2, then inside the zlib payload a u16 NetConfig version and a u16 version per section (network, partylines, profiles, beltpacks, antennas, …) | `container/netconfig/section versions` (e.g. `2/6/10.2.17.19.1.1.6.6.60000`) |
 
-- **Approved** fingerprints are listed in `APPROVED_VERSIONS` in `web_extractor.html`. Only builds that have been checked against real files are on the list.
-- **Unapproved** files still parse (Artist uses the nearest older rule set in `ARTIST_RULE_PROFILES`), but they are marked **Unverified** with a warning that the output might not be trusted. Bolero warnings name the section whose version changed.
+- **Approved** fingerprints are listed in `APPROVED_VERSIONS` in `web_extractor.html` and `riedel_formats.py` (keep the two in sync). Only builds that have been checked against real files are on the list.
+- **Unapproved** files still parse, with the nearest older rule set from `ARTIST_RULE_PROFILES`. They are marked **Unverified** with a warning that the output might not be trusted: on the file card, in the Excel Summary sheet, in the JSON, in the CLI output and as a macOS app alert. Bolero warnings name the section whose version changed.
 - **Non-configuration files** (for example a JSON export renamed to `.art`) are rejected instead of being parsed into empty sheets.
-- **To approve a new version:** load a real file, spot-check each sheet against Director or the Bolero web UI, then add its fingerprint to `APPROVED_VERSIONS`.
+- **To approve a new version:** load a real file, spot-check each sheet against Director or the Bolero web UI, then add its fingerprint to `APPROVED_VERSIONS` in both files.
 
-Known version differences: Director 8.9 stores key assignments as `b8 03 ff 52` records; Director 8.6 does not. So on 8.6 files, Bolero beltpack keys are marked "Not decoded" rather than guessed.
+Known version differences between Director 8.6 and 8.9: key-assignment records use type code `0x4000` in 8.6 and `0x5000` in 8.9, and 8.9 writes 4 extra bytes after each conference long name. Everything else decoded so far uses the same layout in both.
+
+### What is decoded from the file, and what is not yet
+
+The parsers read these structures directly, with no show-specific values:
+
+| | Decoded | Not decoded yet (shown as "Not decoded", "—" or "inferred") |
+|---|---|---|
+| **Bolero** | Show name, partylines, profiles and their keys, beltpacks (hardware ID, user, beltpack ID, keys), P2P targets, named antennas, audio devices and channels, GPIO triggers, save date and network ID | Live RF / online status (a save file does not contain it), net masters |
+| **Artist** | Director version and schema, endpoints (name, alias, slot.port, type), panel and beltpack key labels and long names, conferences with member endpoints, dynamic conferences, trunk lines | Key talk/listen function and latching mode, conference talker/listener split, groups (talk groups), IFBs, node assignment when the port name does not include the node, frame models, controllers, PSUs, licences; card models are inferred from port types |
 
 ---
 
@@ -82,7 +91,7 @@ For headless server environments, automated show deployments, and terminal pipel
 ## Extracted Excel Workbook Structures
 
 ### Riedel Artist (`.art`) Workbook Structure
-Every generated Artist workbook contains up to 12 specialized sheets:
+Every generated Artist workbook contains up to 12 specialized sheets (see the table above for which fields are decoded):
 
 1. **Summary**: Frame metadata, Director software build, system signature, ring topology, and equipment inventory tallies.
 2. **Nodes & Topology**: Master node, breakout frames, routing cores, control IP addresses, subnets, gateways, service IPs, and fiber ring loop status.
