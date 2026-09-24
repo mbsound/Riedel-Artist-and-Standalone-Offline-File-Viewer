@@ -1,4 +1,4 @@
-"""
+﻿"""
 Condense Ghidra output from DecompileSerializers.java into a readable read/write listing.
 Drops MFC buffer management, exception plumbing and declarations; turns inlined CArchive
 accesses into READ_/WRITE_ calls.
@@ -16,7 +16,8 @@ NOISE = [
     re.compile(r'^\s*if \(\(\(?\w+->m_nMode & 1\)? == 0\)\) goto \w+;\s*$'),
     re.compile(r'^\s*if \(\(\~?\(?\w+->m_nMode & 1\)? [!=]= 0\)\) goto \w+;\s*$'),
     re.compile(r'^\s*\w+Stack_\w+ = .*;\s*$'),
-    re.compile(r'ExceptionList|DAT_0128a000|puStack_c = |local_8 = |local_8\._\d_\d_ = '),
+    re.compile(r'^\s*(ExceptionList = |local_10 = ExceptionList;|\w+ = DAT_0128a000 \^|puStack_c = |'
+               r'local_8 = |local_8\._\d_\d_ = )'),
     re.compile(r'^\s*/\* WARNING: Subroutine does not return \*/\s*$'),
     re.compile(r'^\s*\w+ = \(?\w+ \*?\)?\w+;\s*$'),   # plain register aliases like pCVar5 = ar;
 ]
@@ -40,7 +41,12 @@ def reduce_func(lines):
     lines = lines[:body_start + 1] + lines[k:]
     pending_read = None
     while i < len(lines):
-        l = lines[i]
+        # stack-cookie values that the decompiler sometimes passes as a spurious extra argument
+        l = re.sub(r',\s*DAT_0128a000 \^ \(uint\)&stack0x\w+', '', lines[i])
+        l = re.sub(r'\(DAT_0128a000 \^ \(uint\)&stack0x\w+\)', '()', l)
+        # a read's pointer advance follows within a couple of lines; don't let it swallow later ones
+        if pending_read is not None and i - pending_read > 3:
+            pending_read = None
         # buffer refill / flush blocks and mode-check throw blocks
         if FILL_OPEN.match(l) or MODE_OPEN.match(l):
             depth, j = 0, i
@@ -50,37 +56,39 @@ def reduce_func(lines):
                 if depth <= 0:
                     break
             block = '\n'.join(lines[i:j])
-            if 'CArchive_' in block or 'Afx' in block or 'GetBuffer' in block:
+            # Only the short buffer-refill / throw blocks; a mode test can also open the whole
+            # load (or store) branch of a Serialize, which must be kept.
+            if j - i <= 6 and ('CArchive_' in block or 'Afx' in block or 'GetBuffer' in block):
                 i = j
                 continue
         m = READ.match(l)
         if m:
             t = TYPES.get(m.group(3), m.group(3))
             out.append('%s%sREAD_%s();' % (m.group(1), m.group(2), t))
-            pending_read = True
+            pending_read = i
             i += 1
             continue
         m = READ_DEREF.match(l)
         if m:
             out.append('%s%sREAD_u8();' % (m.group(1), m.group(2)))
-            pending_read = True
+            pending_read = i
             i += 1
             continue
         m = WRITE.match(l)
         if m:
             out.append('%sWRITE_%s(%s);' % (m.group(1), TYPES.get(m.group(2), m.group(2)), m.group(3)))
-            pending_read = True
+            pending_read = i
             i += 1
             continue
         m = WRITE_DEREF.match(l)
         if m:
             out.append('%sWRITE_u8(%s);' % (m.group(1), m.group(2)))
-            pending_read = True
+            pending_read = i
             i += 1
             continue
         m = ADV_TMP.match(l)
         if m and i + 1 < len(lines) and re.match(r'^\s*\w+->m_lpBufCur = %s;\s*$' % m.group(1), lines[i + 1]):
-            if pending_read:
+            if pending_read is not None:
                 pending_read = None
             else:
                 out.append(re.match(r'^\s*', l).group() + 'SKIP(%s);' % m.group(2))
@@ -89,7 +97,7 @@ def reduce_func(lines):
         m = ADV.match(l)
         if m:
             n = m.group(2) or m.group(4)
-            if pending_read:
+            if pending_read is not None:
                 pending_read = None
             else:
                 out.append(re.match(r'^\s*', l).group() + 'SKIP(%s);' % n)
