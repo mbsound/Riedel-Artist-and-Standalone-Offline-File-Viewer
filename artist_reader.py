@@ -1489,18 +1489,23 @@ def read_ifb_endpoint(ar, name):
     return e
 
 
+IFB_DIM_DB = {6: '-24 dB'}
+
+
 def read_ifb(ar, o):
     """CPhysIFB (0x66) FUN_00c74080."""
     o['ifb_number'] = ar.u16()
     if ar.version < 0x43:
         o['name'] = ar._take(8).decode('cp1252', 'replace').rstrip('\0')
     else:
-        o['name'] = ar.string()
+        o['label'] = ar.string()                            # confirmed: key label, e.g. 'IFB 0001'
     o['input'] = read_ifb_endpoint(ar, 'input')
     o['mix_minus'] = read_ifb_endpoint(ar, 'mix-minus')
     o['output'] = read_ifb_endpoint(ar, 'output')
     d = ar.u8()
-    o['dim_level'] = 5 if d > 7 else d                   # +0x20
+    o['dim_level'] = 5 if d > 7 else d                   # +0x20 (Director clamps >7 to 5)
+    # 6 = -24 dB confirmed (2026-09-24). Likely scale, from Director's dim strings: 1..6 = -3/-6/-9/-12/-18/-24 dB.
+    o['dim_db'] = IFB_DIM_DB.get(o['dim_level'], 'unconfirmed (%d)' % o['dim_level'])
     f = ar.u8()
     o['ifb_flag_a'], o['ifb_flag_b'] = f & 1, (f >> 1) & 1
     o['long_name'] = ar.string()
