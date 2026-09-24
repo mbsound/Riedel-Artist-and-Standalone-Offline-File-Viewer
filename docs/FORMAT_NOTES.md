@@ -17,15 +17,23 @@ Working notes for continuing the Artist `.art` / Bolero `.bol` decoding work, wr
 | `tools/director_disasm.py` | Static helpers for reading Director's executable (needs `pip install capstone`). |
 
 ### Sample files (gitignored; copy them to the new machine by hand)
-- `Verified Real Artist Files/` holds the trusted set: `show-save-A.Art`, `show-save-B.Art`, `show-save-C.Art`. All three are Director 8.6.D1-29, schema `0x520`.
-- `Artist CRAZY.Art` is a Director 8.9.D2-14 test system (schema `0x580`) and the only 8.9 sample. Its operator ground truth is in §7.
-- `test-save-D.Art` is Director 8.6.
-- The seven `*.bol` files are Bolero Standalone NetConfig saves.
-- `show-save-B.Art` in the project root is a **JSON export renamed to .Art**, not a binary. The real one is in `Verified Real Artist Files/`.
+Everything to transfer is collected in one folder, `Verified Real Artist Files/` (about 61 MB):
+
+| Path inside the folder | What |
+|---|---|
+| `show-save-A.Art`, `show-save-B.Art`, `show-save-C.Art` | The trusted set. Real shows, Director 8.6.D1-29, schema `0x520`. |
+| `Artist test files (not show files)/Artist CRAZY.Art` | Director 8.9.D2-14 test system (schema `0x580`). The only 8.9 sample; operator ground truth in §7. |
+| `Artist test files (not show files)/test-save-D.Art` | Director 8.6. |
+| `Bolero Standalone saves/*.bol` | The 8 Bolero Standalone NetConfig saves. |
+| `Reference binaries/Director 8.9.D2.exe` | Director, for static reading (`tools/director_disasm.py`). |
+| `Reference binaries/libRadon.so` | Bolero firmware library the `.bol` layout was read from (`CombinedNetConfig::packForSaving`). |
+
+The `show-save-B.Art` in the project root is a **JSON export renamed to .Art**, not a binary. Use the copy in this folder.
 
 ### Regression check (run after every change)
 ```bash
-node tools/harness.js web_extractor.html out/ "Verified Real Artist Files"/*.Art "Artist CRAZY.Art" test-save-D.Art *.bol
+V="Verified Real Artist Files"
+node tools/harness.js web_extractor.html out/ "$V"/*.Art "$V/Artist test files (not show files)"/*.Art "$V/Bolero Standalone saves"/*.bol
 ```
 Then compare `out/*.json` with `art_extractor.parse_art_file()` and `bol_extractor.parse_bol_file()`. Cards, nodes, ports, keys, conferences, warnings and notices must all be identical.
 
