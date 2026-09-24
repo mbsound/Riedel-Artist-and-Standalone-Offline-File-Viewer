@@ -1065,8 +1065,8 @@ def read_port(ar, o, pool_state=0):
                 if v > 0x3af:
                     s['u16c'] = ar.u16()
                 if s.get('u32') is not None:
-                s['ip'] = '.'.join(str(x) for x in s['u32'].to_bytes(4, 'big'))
-            o['output_media_2'] = s          # confirmed: Bolero multicast IP (u32) + RTP port (u16a)
+                    s['ip'] = '.'.join(str(x) for x in s['u32'].to_bytes(4, 'big'))
+                o['output_media_2'] = s      # confirmed: Bolero multicast IP (u32) + RTP port (u16a)
         if v > 0x2ef and ar.u8() & 1:
             o['port_c10a80'] = (ar.u16(), ar.u16())
         o['port_str'] = ar.string()
