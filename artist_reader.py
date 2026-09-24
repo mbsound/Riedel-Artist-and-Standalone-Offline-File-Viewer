@@ -1,6 +1,6 @@
-"""
+﻿"""
 Sequential reader for Riedel Director `.Art` configuration files, transcribed from Director 8.9.D2's
-own load code (see docs/FORMAT_NOTES.md §5). Unlike the pattern-matching parser in riedel_formats.py,
+own load code (see docs/FORMAT_NOTES.md Â§5). Unlike the pattern-matching parser in riedel_formats.py,
 this reads the file exactly the way Director does: header, object directory, then every object's
 Serialize() record in directory order.
 
@@ -957,12 +957,13 @@ def read_panel_ui(ar, cls):
     return u
 
 
-def read_port(ar, o):
-    """CPhys11xxBase load FUN_00cad990: every port, panel and beltpack type."""
+def read_port(ar, o, pool_state=0):
+    """CPhys11xxBase load FUN_00cad990: every port, panel and beltpack type.
+    pool_state 2 = the port is a pool holder (CDM-102 sets it via FUN_00be1700)."""
     v, cls = ar.version, o['class']
     o['port_208'] = ar.u8() if v >= 0x390 else 0xffffffff
     if v > 0x36:
-        read_pool_holder(ar, o)
+        read_pool_holder(ar, o, pool_state)
     if v < 0x2c:
         o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
     elif v < 0x43:
@@ -1089,10 +1090,468 @@ def read_port(ar, o):
         o['port_338'] = ar.u16()
 
 
+# Expansion panels: key slots stored = vtable+0xc0 x vtable+0xc8 (tools/class_consts.py 0xc0 0xc8).
+EXPANSION_SLOTS = {0x00b: 32, 0x40b: 12, 0x40c: 32, 0x40e: 32, 0x40f: 32, 0x411: 32, 0x413: 32,
+                   0x415: 32, 0x418: 32, 0x419: 24, 0x427: 32, 0x431: 16, 0x433: 12, 0x437: 48,
+                   0x507: 32}
+
+
+def read_expansion(ar, o):
+    """CPhysDCP1016Eslave::Serialize FUN_00c65490: expansion panels and slave halves."""
+    v = ar.version
+    if v < 0x2c:
+        o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
+    o['expansion_id'] = ar.i32()                         # +0x188
+    if v < 0x2c:
+        ar.u32()
+    o['key_slots'] = [ar.u32() for _ in range(EXPANSION_SLOTS[o['class']])]   # CPhysKey ids
+    o['host_panel'] = ar.u32()                           # CPhysPanel this expansion is attached to
+
+
+def read_cdm102(ar, o):
+    """CPhysCDM102 FUN_00c23fa0: two short strings, then the normal port record."""
+    if ar.version > 0x36:
+        o['cdm_a'], o['cdm_b'] = old_string(ar), old_string(ar)
+        read_port(ar, o, pool_state=2)
+    else:
+        read_port(ar, o)
+
+
+def read_sip_phone(ar, o):
+    """CPhysSipPhoneConnection (0x502) FUN_00cca330: SIP account + port record (pool holder)."""
+    v = ar.version
+    f = ar.u8()
+    o['sip_flags'] = f
+    o['sip_strings'] = [ar.string() for _ in range(6)]
+    o['sip_i32'] = ar.i32()
+    o['sip_u32'] = ar.u32()                              # written as 5
+    if v > 0x3f:
+        o['sip_str7'] = ar.string()
+    read_port(ar, o, pool_state=2)
+
+
+def read_codec_conn(ar, o):
+    """CPhysCodecConnection (0x508) FUN_00a34540."""
+    o['voip_device'] = ar.u32()                          # CPhysConnectVoipDevice id
+    o['codec_u8'] = ar.u8()
+    o['codec_flags'] = ar.u8()
+    if ar.version > 0x53f:
+        o['codec_str'] = ar.string()
+    read_port(ar, o)
+
+
+def read_nsa_conn(ar, o):
+    """CPhysNsaConnectionIn/Out/Connection (0x513-0x515): NSA device ref + byte(s) + port record."""
+    o['nsa_device'] = ar.i32()
+    o['nsa_u8'] = ar.u8()
+    if o['class'] == 0x515:
+        o['nsa_u8b'] = ar.u8()
+    read_port(ar, o)
+
+
+def read_frame_module(ar, o):
+    """CPhysCPU* FUN_00ca7420 / CPhysPowerSupply FUN_00cc0ae0: position + frame."""
+    o['position'] = ar.i32()                             # +0x88
+    o['node'] = ar.u32()                                 # CPhysNode id
+
+
+def read_gpio_source(ar, o):
+    """Shared tail of GPIO in/out: card / panel / device source, then the name."""
+    o['card_gpio'] = ar.u32()                            # GPIO card (+0x8c into it)
+    o['panel'] = ar.u32()                                # CPhysPanel (+0x188 into it)
+    if ar.version > 0x54f:
+        o['device'] = ar.i32()                           # FUN_007d8600 source (+0x4a8)
+        o['nsa_device'] = ar.i32()
+        o['gpio_u8'] = ar.u8()
+    if ar.version > 0x2f:
+        o['name'] = ar.string()
+
+
+def read_gpio_in(ar, o):
+    """CPhysGpioIn (0x0c) FUN_00c685a0."""
+    v = ar.version
+    if v < 0x30:
+        o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
+    elif v < 0x43:
+        skip_counted(ar)
+    o['gpio_110'], o['gpio_120'] = ar.i32(), ar.i32()
+    o['users'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
+    read_gpio_source(ar, o)
+
+
+def read_gpio_out(ar, o):
+    """CPhysGpioOut (0x0d) FUN_00c6a3d0."""
+    v = ar.version
+    if v < 0x30:
+        o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
+    elif v < 0x43:
+        skip_counted(ar)
+    o['gpio_110'], o['gpio_120'] = ar.i32(), ar.i32()
+    o['gpio_128'] = ar.u8() if v < 0x550 else ar.u32()
+    o['users'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
+    if v < 0x2b:
+        raise ArtFormatError('GPIO out before 0x2b not implemented')
+    o['label'] = ar._take(8).decode('cp1252', 'replace').rstrip('\0') if v < 0x43 else ar.string()
+    if v < 0x39:
+        ar.skip(8)
+    read_gpio_source(ar, o)
+
+
+def read_scroll_list(ar, o):
+    """CPhysScrollList (0x10) FUN_00cc6f30."""
+    v = ar.version
+    if v < 0x42:
+        raise ArtFormatError('scroll list before 0x42 not implemented')
+    entries = []
+    for _ in range(ar.u16()):
+        e = {'command': ar.u32()}
+        w = ar.u16()
+        e['flags'] = w
+        e['u8'] = ar.u8()
+        e['label'] = ar.string()
+        if v >= 0x2c:
+            e['u8b'] = ar.u8()
+        if v >= 0x2f:
+            e['i16'] = ar.i16()
+        entries.append(e)
+    o['entries'] = entries
+    if v > 0x2f:
+        o['name'] = ar.string()
+    if v > 0x37f:
+        o['scroll_flag'] = ar.u8() & 1
+
+
+def read_member_gpio_tail(ar, o):
+    """Group / conference tail: GPIO output, trunk flags + address, long name."""
+    v = ar.version
+    read_gpio_ref(ar, o, 'gpio_out')
+    if v >= 0x25:
+        o['flags'] = ar.u8()
+        if v < 0x29:
+            ar.skip(8)
+        else:
+            o['trunk_address'] = ar.i32()
+    if v > 0x2f:
+        o['long_name'] = ar.string()
+
+
+def read_group(ar, o):
+    """CPhysGroup (0x11, talk group) FUN_00c6d980."""
+    v = ar.version
+    if v < 0x42:
+        raise ArtFormatError('group before 0x42 not implemented')
+    o['label'] = ar.string()
+    members = [ar.u32() for _ in range(ar.u32())]
+    o['members'] = members
+    o['member_words'] = [ar.u16() for _ in members]
+    live = [m for m in members if m in ar.ids]          # Director drops unresolved members here
+    if v > 0x36:
+        o['member_flags'] = list(ar._take(len(live)))
+    read_member_gpio_tail(ar, o)
+    if v >= 0x380:
+        o['group_90'] = ar.u16()
+    if v > 0x55f:
+        o['group_92'] = ar.u16()
+        n = ar.i16()
+        o['group_94'] = 16 if n == -1 else n
+
+
+def read_conference(ar, o):
+    """CPhysConf (0x12) FUN_00c59e90."""
+    v = ar.version
+    if v < 0x42:
+        raise ArtFormatError('conference before 0x42 not implemented')
+    o['label'] = ar.string()
+    o['alias'] = ar.string()
+    members = [ar.u32() for _ in range(ar.u32())]
+    o['members'] = members
+    o['member_words'] = [ar.u16() for _ in members]      # bit 0 -> member flag
+    ar.skip(len(members))
+    if v >= 0x11:
+        o['member_flags'] = list(ar._take(len(members)))   # & 0xef on load
+    read_member_gpio_tail(ar, o)
+    if v > 0x55f:
+        o['conf_ac'] = ar.u16()
+        n = ar.i16()
+        o['conf_ae'] = 16 if n == -1 else n
+
+
+# Audio patch element chain built by the constructor (FUN_00c1f0c0(0, 0)), in array order.
+# Current-format sizes: crosspoint 2 (level, on bit7), amp20db 1, switch 1, amp in/out 2, band-pass 2, limiter 8.
+AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch', 1)] +
+                    [('amp_in', 2)] * 4 + [('bandpass', 2)] * 4 + [('limiter', 8)] * 2 +
+                    [('bandpass', 2)] * 6 + [('limiter', 8)] * 4 + [('amp_out', 2)] * 6)
+
+
+def read_audiopatch(ar, o):
+    """CPhysAudiopatch (0x19) FUN_00c1ff70: per-port mixing / DSP matrix."""
+    v = ar.version
+    if v < 0x2f:
+        raise ArtFormatError('audio patch before 0x2f not implemented')
+    if v < 0x43:
+        o['name_old'] = old_string(ar)
+    o['patch_mode'] = ar.u32()                           # +0x84
+    els = []
+    for kind, size in AUDIOPATCH_CHAIN:
+        b = ar._take(size)
+        if kind == 'crosspoint':
+            els.append({'kind': kind, 'level': b[0], 'on': b[1] >> 7})
+        elif kind in ('amp_in', 'amp_out'):
+            els.append({'kind': kind, 'gain': b[0], 'flag': b[1] >> 7})
+        else:
+            els.append({'kind': kind, 'values': list(b)})
+    o['elements'] = els
+    o['panel'] = ar.u32()                                # CPhysPanel the patch belongs to
+    if v > 0x2f:
+        o['name'] = ar.string()
+
+
+def read_user(ar, o):
+    """CPhysUser (0x23) FUN_00ccd0e0."""
+    v = ar.version
+    if v < 0x30:
+        o['user_strings'] = [ar.wstring() for _ in range(4)]
+        o['user_u16'], o['rights'] = ar.u16(), ar.u16()
+        return
+    o['name'], o['full_name'], o['password'] = ar.string(), ar.string(), ar.string()
+    o['user_u16'] = ar.u16()
+    o['rights'] = ar.u16() if v < 0x3f else ar.u32()
+
+
+def read_virtfn(ar, o):
+    """CPhysVirtFn (0x24) FUN_00ccec90: virtual function (a key without a physical button)."""
+    v = ar.version
+    if v < 0x2c:
+        o['vf_type'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
+    o['vf_id'] = ar.i32()                                # +0x10c
+    o['commands'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
+    o['panel'] = ar.u32()
+
+
+# ----- logic --------------------------------------------------------------------------------
+LOGIC_SRC_TYPES_NO_REF = (1, 8, 9, 10, 0xc, 0xd, 0xe, 0xf)
+
+
+def read_logic_src(ar, o):
+    """CPhysLogicSrc (0x40) FUN_00c886b0: a logic input (GPI, port activity, key, ...)."""
+    v = ar.version
+    o['name'] = ar.wstring() if v < 0x2b else ar.string()
+    if v < 0x2b:
+        ar.wstring()
+    o['label'] = ar.wstring() if v < 0x43 else ar.string()
+    if v >= 0x2d:
+        f = ar.u8()
+        o['invert'], o['src_flag'] = f & 1, (f >> 1) & 1
+    if v >= 0x2a:
+        o['src_type'] = ar.u8()
+        o['src_ref'] = ar.u32()                          # meaning depends on src_type
+
+
+def read_logic_dst(ar, o):
+    """CPhysLogicDst (0x41) FUN_00c7f8d0: a logic output."""
+    v = ar.version
+    if v < 0x43:
+        o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
+    o['rect'] = [ar.i32() for _ in range(4)]
+    o['inputs_a'] = [ar.u32() for _ in range(ar.u8())]
+    o['inputs_b'] = [ar.u32() for _ in range(ar.u8())]
+    o['sources'] = [(ar.u32(), [ar.f32() for _ in range(4)]) for _ in range(ar.u8())]
+    o['commands'] = [ar.u32() for _ in range(ar.i32())]
+    if v > 0x2e:
+        o['lines'] = [ar.u32() for _ in range(ar.u8())]
+    o['dst_ref'] = ar.u32()
+    if v > 0x2f:
+        o['name'] = ar.string()
+
+
+def read_logic_line(ar, o):
+    """CPhysLogicLine (0x42) FUN_00c870e0: a wire between logic elements."""
+    o['line_u8a'], o['line_u8b'] = ar.u8(), ar.u8()
+    o['from'], o['to'], o['dst'] = ar.u32(), ar.u32(), ar.u32()
+    o['points'] = [(ar.i32(), ar.i32()) for _ in range(ar.u32())]
+
+
+def read_logic_gate(ar, o):
+    """CPhysLogicGate (AND/OR/NOT/split/NOP/NOR/XOR/XNOR/NAND/D-flip-flop/mono-flop) FUN_00c82440."""
+    if ar.version < 0x2b:
+        skip_counted(ar)
+    o['rect'] = [ar.u32() for _ in range(4)]
+    o['inputs'] = [(ar.u32(), ar.u8()) for _ in range(ar.u8())]
+    o['outputs'] = [(ar.u32(), ar.u8()) for _ in range(ar.u8())]
+    o['dst'] = ar.u32()
+
+
+def read_logic_monoflop(ar, o):
+    """CPhysLogicGateMonoFlop (0x86) FUN_00c845a0: pulse time + retrigger flag, then the gate."""
+    o['monoflop_time'] = ar.u32()
+    o['monoflop_flag'] = ar.u8() & 1
+    read_logic_gate(ar, o)
+
+
+def read_logic_clock(ar, o):
+    """CPhysLogicClock (0x87) FUN_00c7d8d0 (no base trailer)."""
+    o['clock'] = [ar.u32() for _ in range(5)]
+    o['dst'] = ar.u32()
+
+
+# ----- shortlists, scheduler, events --------------------------------------------------------
+def read_nothing(ar, o):
+    """Root containers (port shortlists, group/conf shortlists, scheduler, events): trailer only."""
+
+
+def read_port_shortlist(ar, o):
+    """CPhysPortShortlist (0x41c) FUN_00cbffc0."""
+    o['name'] = ar.string()
+    o['panels'] = u32_list(ar)
+
+
+def read_group_conf_shortlist(ar, o):
+    """CPhysGroupConfShortlist (0x423) FUN_00c6fbd0."""
+    o['name'] = ar.string()
+    o['groups'] = u32_list(ar)
+    o['conferences'] = u32_list(ar)
+
+
+def read_scheduler_task(ar, o):
+    """CPhysSchedulerTask (0x5a) FUN_00cc4d30."""
+    o['name'] = ar.string()
+    o['schedule'] = list(ar._take(7))                    # +0x88..0x8e (days / time fields)
+    o['task_u16'] = ar.u16()
+    o['event'] = ar.i32()
+
+
+EVENT_ACTIONS = {1: 'mcr_conference', 2: 'call_to_conference', 3: 'port_to_port', 4: 'logic_source',
+                 5: 'call_to_group', 6: 'call_to_port', 7: 'listen_to_port'}
+
+
+def read_event_action(ar):
+    """FUN_00c5f7a0 factory + CEvAct*::Serialize (vtable +0x28)."""
+    v, t = ar.version, ar.u8()
+    a = {'type': EVENT_ACTIONS.get(t, t)}
+    if t == 1:                                           # CEvActMcrConf FUN_00c625a0
+        a['conference'] = ar.u32()
+        a['members'] = u32_list(ar)
+    elif t == 2:                                         # CEvActCmdConf FUN_00c63fb0
+        a['conference'], a['flags'], a['port'] = ar.u32(), ar.u8(), ar.u32()
+    elif t == 3:                                         # CEvActPortToPort FUN_00c61bc0
+        a['flags'], a['source'], a['dest'] = ar.u8(), ar.u32(), ar.u32()
+        if v > 0x2f:
+            a['label_a'], a['label_b'] = old_string(ar), old_string(ar)
+    elif t == 4:                                         # CEvActCmdLogicSrc FUN_00c633b0
+        a['logic_source'], a['port'] = ar.u32(), ar.u32()
+    elif t == 5:                                         # CEvActCmdGroup FUN_00c63900
+        a['group'], a['flag'], a['port'] = ar.u32(), ar.u8(), ar.u32()
+    elif t in (6, 7):                                    # CEvActCallToPort / ListenToPort
+        a['flags'], a['source'], a['dest'] = ar.u8(), ar.u32(), ar.u32()
+        if t == 6 and v > 0x42:
+            a['label'] = ar.string()
+        elif v > 0x2f:
+            a['label'] = old_string(ar)
+    else:
+        raise ArtFormatError('unknown event action type %d at 0x%x' % (t, ar.p - 1))
+    return a
+
+
+def read_event(ar, o):
+    """CPhysEvent (0x5d) FUN_00c605c0."""
+    o['active'] = ar.u8() != 0
+    o['name'] = ar.string()
+    o['actions'] = [read_event_action(ar) for _ in range(ar.u32())]
+
+
+# ----- IFBs ---------------------------------------------------------------------------------
+def read_ifb_endpoint(ar, name):
+    """FUN_00c747b0: IFB audio endpoint; loaders registered for types 1, 2 and 4 only."""
+    t = ar.u8() if ar.version >= 0x37 else 1
+    if t == 0:
+        return None
+    e = {'role': name, 'type': t}
+    if t == 1:                                           # port FUN_00aeeea0
+        e['port'], e['u16'] = ar.u32(), ar.u16()
+    elif t == 2:                                         # group FUN_00aee860
+        e['group'] = ar.u32()
+    elif t == 4:                                         # trunk FUN_00aef350
+        e['a'], e['b'], e['u16'] = ar.u32(), ar.u32(), ar.u16()
+    else:
+        raise ArtFormatError('IFB endpoint type %d has no loader in Director' % t)
+    return e
+
+
+def read_ifb(ar, o):
+    """CPhysIFB (0x66) FUN_00c74080."""
+    o['ifb_number'] = ar.u16()
+    if ar.version < 0x43:
+        o['name'] = ar._take(8).decode('cp1252', 'replace').rstrip('\0')
+    else:
+        o['name'] = ar.string()
+    o['input'] = read_ifb_endpoint(ar, 'input')
+    o['mix_minus'] = read_ifb_endpoint(ar, 'mix-minus')
+    o['output'] = read_ifb_endpoint(ar, 'output')
+    d = ar.u8()
+    o['dim_level'] = 5 if d > 7 else d                   # +0x20
+    f = ar.u8()
+    o['ifb_flag_a'], o['ifb_flag_b'] = f & 1, (f >> 1) & 1
+    o['long_name'] = ar.string()
+
+
+def read_ifb_container(ar, o):
+    """CPhysIFBContainer (0x70) FUN_00c77d70: base trailer FIRST, then its own fields."""
+    read_base(ar, o)
+    o['container_u8'] = ar.u8()
+    o['container_u32'] = ar.u32()
+
+
+def read_phone_book(ar, o):
+    """CPhysPhoneBook (0x1a) FUN_00a44c80."""
+    o['entries'] = [{'name': ar.string(), 'number': ar.string()} for _ in range(ar.u16())]
+    o['name'] = ar.string()
+
+
+# Classes whose Serialize does not call CPhysObj::Serialize at the end (no trailing base record).
+NO_BASE_TRAILER = {0x087, 0x070}
+
 READERS = {
     0x001: read_web,
     0x002: read_net,
     0x003: read_node,
+    0x040: read_logic_src,
+    0x041: read_logic_dst,
+    0x042: read_logic_line,
+    0x043: read_logic_gate, 0x045: read_logic_gate, 0x046: read_logic_gate, 0x047: read_logic_gate,
+    0x080: read_logic_gate, 0x081: read_logic_gate, 0x082: read_logic_gate, 0x083: read_logic_gate,
+    0x084: read_logic_gate, 0x085: read_logic_gate, 0x086: read_logic_monoflop,
+    0x087: read_logic_clock,
+    0x059: read_nothing, 0x05c: read_nothing, 0x41b: read_nothing, 0x422: read_nothing,
+    0x05a: read_scheduler_task,
+    0x05d: read_event,
+    0x41c: read_port_shortlist,
+    0x423: read_group_conf_shortlist,
+    0x066: read_ifb,
+    0x01a: read_phone_book,
+    0x070: read_ifb_container,
+    0x010: read_scroll_list,
+    0x019: read_audiopatch,
+    0x023: read_user,
+    0x024: read_virtfn,
+    0x011: read_group,
+    0x012: read_conference,
+    0x00c: read_gpio_in,
+    0x00d: read_gpio_out,
+    0x00f: read_frame_module,
+    0x037: read_frame_module,
+    0x038: read_frame_module,
+    0x039: read_frame_module,
+    0x04c: read_frame_module,
+    0x050: read_frame_module,
+    0x051: read_frame_module,
+    0x052: read_frame_module,
+    0x06a: read_frame_module,
+    0x408: read_cdm102,
+    0x502: read_sip_phone,
+    0x508: read_codec_conn,
+    0x513: read_nsa_conn,
+    0x514: read_nsa_conn,
+    0x515: read_nsa_conn,
     0x005: read_lwl,
     0x009: read_key,
     0x00a: read_cmd_route,
@@ -1126,11 +1585,14 @@ for _c in (0x401, 0x402, 0x403, 0x404, 0x405, 0x406, 0x407, 0x409, 0x40a, 0x40d,
            0x432, 0x434, 0x435, 0x436, 0x438, 0x439, 0x440, 0x441, 0x442, 0x443, 0x444, 0x445,
            0x505, 0x506, 0x50d, 0x517):
     READERS[_c] = read_port
+for _c in EXPANSION_SLOTS:
+    READERS[_c] = read_expansion
 
 
 def read_objects(ar, objs, stop_on_unknown=True):
     """The Serialize loop of FUN_00cd32c0: one record per directory entry, in order."""
     out = []
+    ar.ids = {oid for _, oid, _ in objs}
     for cls, oid, grp in objs:
         fn = READERS.get(cls)
         start = ar.p
@@ -1140,7 +1602,8 @@ def read_objects(ar, objs, stop_on_unknown=True):
             raise ArtFormatError('no reader for class 0x%x' % cls)
         o = {'class': cls, 'id': oid, 'group': grp, 'offset': start}
         fn(ar, o)
-        read_base(ar, o)
+        if cls not in NO_BASE_TRAILER:
+            read_base(ar, o)
         o['length'] = ar.p - start
         out.append(o)
     return out, None
@@ -1152,6 +1615,20 @@ def read_art(data):
     objs = read_directory(ar)
     hdr['directory_end'] = ar.p
     return hdr, objs, ar
+
+
+def parse_art(data):
+    """Read a whole .Art file. Returns (header, records). Raises ArtFormatError on any mismatch,
+    including a missing 'ENDE' end marker (FUN_00cdc5a0 checks it the same way)."""
+    hdr, objs, ar = read_art(data)
+    recs, stop = read_objects(ar, objs)
+    if stop:
+        cls, oid, grp, pos = stop
+        raise ArtFormatError('no reader for class 0x%x (%s) at 0x%x' % (cls, grp, pos))
+    end = ar.wstring()
+    if end != 'ENDE' or ar.p != len(data):
+        raise ArtFormatError('expected ENDE at end of file, got %r at 0x%x' % (end, ar.p))
+    return hdr, recs
 
 
 if __name__ == '__main__':
