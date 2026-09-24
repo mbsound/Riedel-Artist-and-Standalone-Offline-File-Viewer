@@ -28,7 +28,12 @@ Everything to transfer is collected in one folder, `Verified Real Artist Files/`
 | `Reference binaries/Director 8.9.D2.exe` | Director, for static reading (`tools/director_disasm.py`). |
 | `Reference binaries/libRadon.so` | Bolero firmware library the `.bol` layout was read from (`CombinedNetConfig::packForSaving`). |
 
-The `show-save-B.Art` in the project root is a **JSON export renamed to .Art**, not a binary. Use the copy in this folder.
+The `show-save-B.Art` in this folder is a real Director 8.6 binary. (A different copy in the old repo root was a JSON export renamed to .Art.)
+
+### Windows PC setup (Parallels, Windows on ARM)
+- Director 8.3.D2 to 8.9.D2 are installed under `C:\Program Files (x86)\Riedel\`.
+- Use x64 Python 3.13 (`%LOCALAPPDATA%\Programs\Python\Python313\python.exe`) with `openpyxl capstone pefile`. Capstone has no ARM64 Windows wheel.
+- `Z:` is the Mac share `\\Mac\Home`; git needs a `safe.directory` entry for it.
 
 ### Regression check (run after every change)
 ```bash
@@ -80,7 +85,14 @@ Then compare `out/*.json` with `art_extractor.parse_art_file()` and `bol_extract
 ### 3.2 Object directory
 Starts right after the version string:
 - `u32 0, u32 1, u32 (0x1f5)`, then groups of `[u32 count][count × (u16 class, u16 0, u32 object id)]`.
-- The class codes are Director's internal object classes, not hardware types. Known classes:
+- The class codes are Director's internal object classes, not hardware types.
+- **Confirmed from Director 8.9.D2:** the full class-code → C++ class map is in `docs/director_class_codes.txt` (171 codes), read from each class's own `GetClassCode()` (vtable offset `0x30`, which the save routine calls to write the directory) and cross-checked against the object factory `FUN_00cde850`. Regenerate with `tools/class_codes.py`.
+  - Key commands: `0x13` CmdTalk (Call to Port), `0x14` CmdListen, `0x15` CmdGpio, `0x16` CmdConf, `0x17` CmdGroup, `0x18` CmdReply, `0x0a` CmdRoute, `0x35` CmdBeep, `0x44` CmdLogic, `0x67` CmdCallToIFB, … A key can hold several commands.
+  - Cards: `0x101` ClientPanelCoax, `0x102` Cat5, `0x103` Audio (AIO), `0x106` Adat, `0x107` Madi, `0x108` VoIP, `0x109` PanelAes67, `0x10a` PanelDante, `0x10b` SicAes67, `0x10c` Nic, `0x10d` SubSic, `0x10e` SicMadi, `0x10f` SicDante, `0x201` ClientGpio.
+  - Ports / panels: `0x401` 2WireIn, `0x402` 2WireOut, `0x403` 4Wire, `0x405` DCP1016E, `0x416` C3Beltpack, `0x440` BPK1006 (Bolero), `0x443`/`0x444` DSP2312 Plus/Basic, `0x505` RSP1232HL, `0x506` RSP1216HL, `0x517` DSP1216HL; expansion panels `0x40b` DEM1006E, `0x40c` DCP1016Eslave, `0x427` ECP1116, `0x437` ESP2324, `0x507` ESP1216HL, ….
+  - (An earlier guess of "UTF-16 name table index + 6" was wrong for several codes; don't use it.)
+
+Older class table (from sample files):
 
 | Class | Object |
 |---|---|
