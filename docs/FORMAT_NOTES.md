@@ -170,6 +170,27 @@ The next record's header repeats the owner. The owner is the endpoint object id.
 
 ---
 
+## 3A. The real file layout, from Director's own code (supersedes most of §3)
+
+`artist_reader.py` reads a whole `.Art` file the way Director 8.9.D2 does. Every reader cites the Director function it was transcribed from. All five sample files (8.6 schema `0x520` and 8.9 schema `0x580`, 21,647 objects in total) parse from the first byte to the final `ENDE` with no gaps.
+
+- **File** = header (`FF FE FF 0E "R2000 Cfg-File"`, u32 schema, [≥`0x2d`] creator string) + **object directory** + **one record per directory entry, in directory order** + MFC Unicode string `ENDE`. Loader: `FUN_00cdc5a0`, then body `FUN_00cd32c0`.
+- **Strings** (`Ar_ReadString` `FUN_00ddb0e0`): u8 length (`0xFF` → u16, `0xFFFF` → u32), then UTF-8 bytes. A few fields (passwords) are stored bit-inverted. Before schema `0x43`, strings were u8 length + ANSI, or fixed 8/32-byte fields.
+- **Directory**: about 31 typed groups (see `DIRECTORY` in `artist_reader.py`). Each group is either ids of a fixed class, (class, id) pairs, or container + children (IFBs, shortlists, scheduler, events). The old "object directory" in §3.2 is just the first few groups.
+- **Record** = class-specific fields, then the **base trailer** from `CPhysObj::Serialize` `FUN_00ca8eb0`: u32 flags (`0x4000`/`0x5000`), u32 owner (`CPhysUser` id; the "system id" of §3.3), u32 ref, u8 n + n × (u32 user, u8 rights). What §3 called each record's "`type` + `system id`" header is really the *previous* record's trailer. Exceptions: `CPhysLogicClock` has no trailer, and `CPhysIFBContainer` writes it *first*.
+- **Class codes**: `docs/director_class_codes.txt` (from each class's `GetClassCode()`).
+- **Keys** (`CPhysKey` `FUN_00c7b160`): u8 slot, label, u16 flags1, [≥`0x2f0`] u16 flags2, u8, u16 n × command ids, u32 holder (panel or expansion), optional fields gated by flag bits, long name, i16. **Key mode = flags1 bits 6–7** (stored 0/1/2/3 → Director's internal 1/2/3/0). The UI names for these values still need confirming in Director.
+- **Commands** (Talk `0x13`, Listen `0x14`, Conf `0x16`, …): each has its own record, followed by the command base `FUN_00c57640` (u8 flags, u32 ref, name). Talk/Listen/CallToIFB include a trunk target only when a bit in their first u16 is set.
+- **Frames** (`CPhysNode` `FUN_00ca2500`): 18 slot object ids plus each slot's class code, 2 controllers, 2 PSUs, net id, name.
+- **Expansions** (`FUN_00c65490`): expansion id, key-slot ids (rows × columns per model), **host panel id**.
+- **Ports/panels** (`FUN_00cad990`): one shared record for all port and panel types, with optional sub-blocks (audio stream settings, AES67/Dante streams, 12xx/23xx panel UI properties), selected by flag bits and class code.
+- **Conferences/groups**: label, alias, members + per-member flags, GPIO trigger, trunk address, long name.
+- **Audio patches**: a fixed 67-element DSP chain (36 crosspoints, amps, band-passes, limiters, switch).
+- **Events** (`FUN_00c605c0`): active flag, name, actions (7 types, `CEvAct*`).
+- Readers for classes that none of the samples contain (remaining command types, virtual keys, VoIP/NSA devices) are transcribed but untested. **ZMXIF (`0x48`) and the MCR family (`0x4a`, `0x53`–`0x58`, `0x5b`, `0x64`) are not transcribed yet.**
+
+Tools: `tools/ghidra/DecompileSerializers.java` (Ghidra 12 headless, types `CArchive`, names MFC helpers), `tools/reduce_decomp.py` and `tools/dedupe_decomp.py` (make the output readable), `tools/class_codes.py`, `tools/class_consts.py` (per-class constants such as key rows/columns), `tools/dre.py` (capstone helpers).
+
 ## 4. Director 8.9.D2 findings (static read)
 
 - PE32, image base `0x400000`, MSVC with RTTI (e.g. `.?AVCPhysPanel@@`, `CPhysNode`, `CPortTrunkingSetupPP`) and embedded source paths (`...\Director\PhysGroup.cpp`, `PhysIFB.cpp`, `IFBDocument.cpp`).

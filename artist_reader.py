@@ -1507,13 +1507,176 @@ def read_phone_book(ar, o):
     o['name'] = ar.string()
 
 
+def read_connect_voip_device(ar, o):
+    """CPhysConnectVoipDevice (0x509) FUN_00a36df0 (untested: not in the sample files)."""
+    ar.u8()
+    o['addresses'] = [(ar.i32(), ar.u16()) for _ in range(3)]
+    o['codec_connections'] = [ar.u32() for _ in range(ar.u16())]
+    if ar.version < 0x550:
+        ar.skip(4)
+    o['voip_u8'] = ar.u8()
+    o['name'] = ar.string()
+
+
+def read_nsa_device(ar, o):
+    """CPhysNsaDevice003A..010C (0x50e-0x512, 0x516, 0x518) FUN_00a41450 (untested)."""
+    ar.u8()
+    o['address_a'] = (ar.i32(), ar.u16())
+    o['address_b'] = (ar.i32(), ar.u16())
+    o['nsa_i32'] = ar.i32()
+    o['nsa_bytes'] = list(ar._take(3))
+    o['gpio_in'] = [ar.u32() for _ in range(ar.u16())]
+    o['gpio_out'] = [ar.u32() for _ in range(ar.u16())]
+    o['connections'] = [(ar.u16(), ar.u32()) for _ in range(ar.u16())]
+    o['name'] = ar.string()
+
+
 # Classes whose Serialize does not call CPhysObj::Serialize at the end (no trailing base record).
 NO_BASE_TRAILER = {0x087, 0x070}
+
+# Command types not present in the sample files: transcribed from Director, untested on real data.
+def _cmd_word(ar, o):
+    o['cmd_word'] = ar.u32() if ar.version < 0x25 else ar.u16()
+
+
+def read_cmd_select_ap(ar, o):
+    """CPhysCmdSelAP (0x25) FUN_00c4bba0: select audio patch."""
+    _cmd_word(ar, o)
+    o['audiopatch'], o['ap_u16'] = ar.u32(), ar.u16()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_signal(ar, o):
+    """CPhysCmdSignal (0x26) FUN_00c4f7a0: call signal to another key."""
+    _cmd_word(ar, o)
+    o['target_key'] = ar.u32()                           # CPhysBaseKey id
+    o['signal_u16'], o['signal_u8a'], o['signal_u8b'] = ar.u16(), ar.u8(), ar.u8()
+    if ar.version >= 0x43:
+        o['signal_text'] = ar.string()
+    elif ar.version > 0x34:
+        o['signal_text'] = ar._take(8).decode('cp1252', 'replace').rstrip('\0')
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_word_only(ar, o):
+    """CPhysCmdEditConf (0x30) FUN_00c3b960."""
+    _cmd_word(ar, o)
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_u32_only(ar, o):
+    """CPhysCmdEditIFB (0x32), CPhysCmdKillMic (0x4d), CPhysCmdAutoListenOff (0x4e)."""
+    o['cmd_u32'] = ar.u32()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_control_ap(ar, o):
+    """CPhysCmdControlAudioPatch (0x31) FUN_00c36e80: key first, then port + value."""
+    o['key'] = ar.u32()
+    o['target'], o['target_u16'] = ar.u32(), ar.u16()
+    o['ap_value'] = ar.i32()
+    o['ap_flag'] = ar.u8() != 0
+    read_cmd_base(ar, o)
+
+
+def read_cmd_dim_speaker(ar, o):
+    """CPhysCmdDimSpeaker (0x33) FUN_00c3ad00."""
+    _cmd_word(ar, o)
+    o['dim'] = ar.u8()
+    o['target'], o['target_u16'] = ar.u32(), ar.u16()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_dim_level(ar, o):
+    """CPhysCmdDimLevel (0x34) FUN_00c39700: two ports and a level."""
+    _cmd_word(ar, o)
+    o['dim'] = ar.u8()
+    o['port_a'], o['port_a_u16'] = ar.u32(), ar.u16()
+    o['port_b'], o['port_b_u16'] = ar.u32(), ar.u16()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_dial(ar, o):
+    """CPhysCmdDial (0x36) FUN_00c37da0."""
+    _cmd_word(ar, o)
+    o['dial_u8'] = ar.u8()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_keypad(ar, o):
+    """CPhysCmdKeypad (0x49) FUN_00c425a0."""
+    o['keypad_u8'] = ar.u8()
+    if ar.version >= 0x2f:
+        o['keypad_text'] = ar.string()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_io_gain(ar, o):
+    """CPhysCmdIOGain (0x4f) FUN_00c411f0: no key field (taken from the base trailer)."""
+    o['gain_flags'] = ar.u8()
+    o['target'], o['target_u16'] = ar.u32(), ar.u16()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_sidetone(ar, o):
+    """CPhysCmdSidetone (0x5e) FUN_00c4d9a0."""
+    o['sidetone'] = list(ar._take(3))
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_send_string(ar, o):
+    """CPhysCmdSendString (0x5f) FUN_00c4c340."""
+    o['send_target'] = ar.i32()
+    o['send_text'] = ar.string()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_hot_mic(ar, o):
+    """CPhysCmdHotMic (0x6b) FUN_00c02850."""
+    o['target'], o['target_u16'] = ar.i32(), ar.u16()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
+
+def read_cmd_clone_output(ar, o):
+    """CPhysCmdCloneOutputPort (0x503) FUN_00c30180."""
+    o['source'], o['source_u16'] = ar.u32(), ar.u16()
+    o['dest'], o['dest_u16'] = ar.u32(), ar.u16()
+    o['clone_u32'] = ar.u32()
+    o['key'] = ar.u32()
+    read_cmd_base(ar, o)
+
 
 READERS = {
     0x001: read_web,
     0x002: read_net,
     0x003: read_node,
+    0x025: read_cmd_select_ap,
+    0x026: read_cmd_signal,
+    0x030: read_cmd_word_only,
+    0x031: read_cmd_control_ap,
+    0x032: read_cmd_u32_only,
+    0x033: read_cmd_dim_speaker,
+    0x034: read_cmd_dim_level,
+    0x036: read_cmd_dial,
+    0x049: read_cmd_keypad,
+    0x04d: read_cmd_u32_only,
+    0x04e: read_cmd_u32_only,
+    0x04f: read_cmd_io_gain,
+    0x05e: read_cmd_sidetone,
+    0x05f: read_cmd_send_string,
+    0x06b: read_cmd_hot_mic,
+    0x503: read_cmd_clone_output,
     0x040: read_logic_src,
     0x041: read_logic_dst,
     0x042: read_logic_line,
@@ -1528,6 +1691,10 @@ READERS = {
     0x423: read_group_conf_shortlist,
     0x066: read_ifb,
     0x01a: read_phone_book,
+    0x41f: read_key,                # CPhysVirtualKey: same record as CPhysKey (FUN_00cd0150)
+    0x509: read_connect_voip_device,
+    0x50e: read_nsa_device, 0x50f: read_nsa_device, 0x510: read_nsa_device, 0x511: read_nsa_device,
+    0x512: read_nsa_device, 0x516: read_nsa_device, 0x518: read_nsa_device,
     0x070: read_ifb_container,
     0x010: read_scroll_list,
     0x019: read_audiopatch,
