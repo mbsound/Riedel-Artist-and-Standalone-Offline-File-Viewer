@@ -619,6 +619,7 @@ def read_cmd_call_ifb(ar, o):
     if v >= 0x2f0:
         b = ar.u8()
         o['ifb_mode'] = 0 if b & 1 else (1 if b & 2 else 2)
+        o['priority'] = {1: 'High'}.get(o['ifb_mode'], 'unconfirmed (%d)' % o['ifb_mode'])   # 1 = High confirmed
     if v < 0x480 or not trunk:
         o['ifb'] = ar.u32()               # CPhysIFB id (0 / 0xffffffff = none)
     o['key'] = ar.u32()
@@ -1063,7 +1064,9 @@ def read_port(ar, o, pool_state=0):
                     s['u32'], s['u16a'], s['u16b'] = ar.u32(), ar.u16(), ar.u16()
                 if v > 0x3af:
                     s['u16c'] = ar.u16()
-                o['port_c101c0'] = s
+                if s.get('u32') is not None:
+                s['ip'] = '.'.join(str(x) for x in s['u32'].to_bytes(4, 'big'))
+            o['output_media_2'] = s          # confirmed: Bolero multicast IP (u32) + RTP port (u16a)
         if v > 0x2ef and ar.u8() & 1:
             o['port_c10a80'] = (ar.u16(), ar.u16())
         o['port_str'] = ar.string()
@@ -1322,12 +1325,17 @@ def read_user(ar, o):
     o['rights'] = ar.u16() if v < 0x3f else ar.u32()
 
 
+# Confirmed on a Bolero (2026-09-24): 0 = Always, 1 = On VOX, 3 = On Call.
+VF_SLOTS = {0: 'Always', 1: 'On VOX', 3: 'On Call'}
+
+
 def read_virtfn(ar, o):
     """CPhysVirtFn (0x24) FUN_00ccec90: virtual function (a key without a physical button)."""
     v = ar.version
     if v < 0x2c:
         o['vf_type'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
     o['vf_id'] = ar.i32()                                # +0x10c
+    o['vf_slot'] = VF_SLOTS.get(o['vf_id'], o['vf_id'])
     o['commands'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
     o['panel'] = ar.u32()
 
