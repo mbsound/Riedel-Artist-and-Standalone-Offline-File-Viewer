@@ -632,6 +632,9 @@ def read_cmd_call_ifb(ar, o):
 # ----- keys (CPhysKey) ------------------------------------------------------------------------
 # Stored key mode (bits 6-7 of the first flag word) -> Director's internal mode value (+0x11c).
 KEY_MODE_INTERNAL = {0: 1, 1: 2, 2: 3, 3: 0}
+# Confirmed 2026-09-24 by a one-change save of Artist CRAZY (Bolero at Node #6 port 2.9, keys 1-3
+# set in Director to Momentary / Auto / Latching): stored 1 = Momentary, 0 = Auto, 2 = Latching.
+KEY_MODE_NAMES = {0: 'Auto', 1: 'Momentary', 2: 'Latching'}
 
 
 def read_key(ar, o):
@@ -653,6 +656,7 @@ def read_key(ar, o):
         o['key_b142'] = (w1 >> 3) & 3
         o['key_b120'] = (w1 >> 5) & 1
         o['mode_internal'] = KEY_MODE_INTERNAL[(w1 >> 6) & 3]
+        o['mode'] = KEY_MODE_NAMES.get((w1 >> 6) & 3, 'unknown (%d)' % ((w1 >> 6) & 3))
     w2 = 0
     if v >= 0x2f0:
         w2 = ar.u16()
