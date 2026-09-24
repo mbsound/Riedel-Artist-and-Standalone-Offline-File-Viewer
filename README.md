@@ -42,6 +42,8 @@ Known version differences between Director 8.6 and 8.9: key-assignment records u
 
 ### What is decoded from the file, and what is not yet
 
+Format details, confirmed facts, Director findings and next steps are in [`docs/FORMAT_NOTES.md`](docs/FORMAT_NOTES.md).
+
 The parsers read these structures directly, with no show-specific values:
 
 | | Decoded | Not decoded yet (shown as "Not decoded", "—" or "inferred") |
