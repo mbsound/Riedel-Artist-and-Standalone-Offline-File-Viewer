@@ -1489,7 +1489,8 @@ def read_ifb_endpoint(ar, name):
     return e
 
 
-IFB_DIM_DB = {6: '-24 dB'}
+# Confirmed 2026-09-24 (eight IFBs set to each dim level in Director).
+IFB_DIM_DB = {0: '0 dB', 1: '-3 dB', 2: '-6 dB', 3: '-9 dB', 4: '-12 dB', 5: '-18 dB', 6: '-24 dB', 7: '-inf'}
 
 
 def read_ifb(ar, o):
@@ -1504,11 +1505,10 @@ def read_ifb(ar, o):
     o['output'] = read_ifb_endpoint(ar, 'output')
     d = ar.u8()
     o['dim_level'] = 5 if d > 7 else d                   # +0x20 (Director clamps >7 to 5)
-    # 6 = -24 dB confirmed (2026-09-24). Likely scale, from Director's dim strings: 1..6 = -3/-6/-9/-12/-18/-24 dB.
     o['dim_db'] = IFB_DIM_DB.get(o['dim_level'], 'unconfirmed (%d)' % o['dim_level'])
     f = ar.u8()
     o['ifb_flag_a'], o['ifb_flag_b'] = f & 1, (f >> 1) & 1
-    o['long_name'] = ar.string()
+    o['long_name'] = ar.string()                         # confirmed: IFB long name
 
 
 def read_ifb_container(ar, o):
