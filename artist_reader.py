@@ -988,7 +988,8 @@ def read_port(ar, o, pool_state=0):
     else:
         o['port_2cc'], n = ar.u8(), ar.u8()
     ar.skip(4 * n)
-    o['port_1b0'], o['port_1b1'], o['port_1b2'] = ar.u8(), ar.u8(), ar.u8()
+    # Panel settings (Port Defaults 1/2 pages): list positions, see PANEL_SETTINGS / panel_settings().
+    o['min_headset_vol'], o['min_speaker_vol'], o['beep_vol'] = ar.u8(), ar.u8(), ar.u8()
     o['room_code'] = ar.u8()                             # +0x2f4, confirmed; see room_code_label()
     if v < 0x2e:
         ar.u8(); ar.u8()
@@ -1010,36 +1011,36 @@ def read_port(ar, o, pool_state=0):
         ar.skip(4 * ar.u32())
     if v < 0x2e:
         o['port_1e8'] = ar.u8()
-    o['port_1b3'] = ar.u8()
+    o['speaker_dim'] = ar.u8()
     if v < 0x2e:
         ar.skip(2)
-    o['port_1b4'] = ar.u8()
+    o['init_single_vol'] = ar.u8()
     if v >= 0x340:
-        o['port_1b5'] = ar.u8()
+        o['init_ifb_vol'] = ar.u8()
     flags = 0
     if 0x25 <= v < 0x2d:
-        o['port_1b6'], o['port_flags_old'] = ar.u8(), ar.u8()
+        o['init_conf_vol'], o['port_flags_old'] = ar.u8(), ar.u8()
     elif v >= 0x2d:
-        o['port_1b6'] = ar.u8()
+        o['init_conf_vol'] = ar.u8()
         flags = o['port_flags'] = ar.u32()
         # Room code mode (confirmed 2026-09-25): bit 8 = speaker mode, bit 9 = headset mode, neither = none.
         # 4-wires have no mode option in Director but are saved with bit 8 set.
         o['room_mode'] = 'Headset' if flags & 0x200 else 'Speaker' if flags & 0x100 else ''
-    o['port_1b7'], o['port_1b8'] = ar.u8(), ar.u8()
+    o['key_brightness'], o['led_brightness'] = ar.u8(), ar.u8()
     if v > 0x25:
         ar.u8()
     if v < 0x2e:
         ar.skip(3)
     b5 = ar._take(5)
-    o['port_1c1_5'] = b5[:3].hex()
+    o['vox_hold'], o['vox_on'], o['vox_off'] = b5[0], b5[1], b5[2]
     # Confirmed 2026-09-25: gain byte g -> (g - 36) / 2 dB (0 = -18 dB, 36 = 0 dB, 72 = +18 dB).
     o['input_gain_db'], o['output_gain_db'] = (b5[3] - 36) / 2, (b5[4] - 36) / 2
     if v < 0x2e:
         ar.skip(2)
     if v >= 0x27:
-        o['port_1ba'] = ar.u16()
+        o['response_timeout_ms'] = ar.u16()
     if v >= 0x28:
-        o['port_1bc'] = ar.u16()
+        o['beep_on_call_ms'] = ar.u16()
     if v >= 0x29:
         o['trunk_address'] = ar.i32()                    # +0x2d0
     if 0x2a <= v <= 0x2d:
@@ -1079,7 +1080,7 @@ def read_port(ar, o, pool_state=0):
         o['port_str'] = ar.string()
     if v > 0x30:
         o['port_398'] = list(ar._take(ar.u8()))
-        o['port_388'] = ar.u8()
+        o['fn_key_assignment'] = ar.u8()
     if v >= 0x3d and v >= 0x2d and (flags >> 21) & 1:
         if ar.u8() != 0xff:
             raise ArtFormatError('port colour marker at 0x%x' % (ar.p - 1))
@@ -1090,7 +1091,7 @@ def read_port(ar, o, pool_state=0):
     else:
         o['port_strings'] = [ar.string() for _ in range(3)]
     if v >= 0x41:
-        o['port_1cc'], o['port_1d0'] = ar.u8(), ar.u8()
+        o['keybank_lock'], o['headset_mode_lock'] = ar.u8(), ar.u8()
     if v > 0x1df:
         o['port_str2'] = ar.string()
         if cls in PANEL_12XX:
@@ -1119,6 +1120,53 @@ PORT_TYPE_NAMES = {
 # Audio ports (2-wire, 4-wire, network in/out) get the card's interface in brackets, e.g. '4-Wire (AIO)'.
 AUDIO_PORT_CLASSES = {0x401, 0x402, 0x403, 0x438, 0x439, 0x441, 0x442}
 CARD_INTERFACE = {0x101: 'AES', 0x103: 'AIO', 0x109: 'AES67', 0x10b: 'AES67', 0x10a: 'Dante', 0x10f: 'Dante'}
+
+
+# Port Defaults 1 / 2 dialogs (FUN_00bd8910 / FUN_00bda2f0 fill the lists; FUN_00bd8590 / FUN_00bd9d00 store
+# them). Confirmed 2026-09-25 by a test save changing every setting on port 2.6 of Artist CRAZY.
+_MIN_VOL = ['%d dB' % v for v in range(-45, 3, 3)]                           # -45 .. 0 dB
+_INIT_VOL = ['+6 dB', '+3 dB', '0 dB', '-3 dB', '-6 dB', '-9 dB', '-12 dB', '-18 dB', '-24 dB', 'mute']
+_PERCENT = ['%d %%' % v for v in range(10, 110, 10)]
+_FN_KEYS = {1: 'Default', 2: 'Beep = Beep, Norm = Monitoring', 3: 'Beep = Monitoring, Norm = Norm',
+            4: 'Beep = Beep, Norm = Copy reply', 5: 'Beep = Copy reply, Norm = Norm',
+            6: 'Beep = Monitoring, Norm = Copy reply', 7: 'ORF (OPT = Mute, Norm = Scroll)'}
+_FN_KEYS_F1F2 = {1: 'F1 = Beep, F2 = Norm', 2: 'F1 = Beep, F2 = Monitoring', 3: 'F1 = Monitoring, F2 = Norm',
+                 4: 'F1 = Beep, F2 = Copy reply', 5: 'F1 = Copy reply, F2 = Norm',
+                 6: 'F1 = Monitoring, F2 = Copy reply'}                       # RCP-11xx, DCP-1116, CCP-1116
+FN_KEY_F1F2_CLASSES = {0x424, 0x425, 0x426, 0x427, 0x432, 0x433}
+
+
+def _pick(table, i):
+    return table[i] if 0 <= i < len(table) else 'value %d' % i
+
+
+def panel_settings(p):
+    """Port/panel settings in Director's own wording (only meaningful for panel and beltpack types)."""
+    on = 12 - 2 * p['vox_on']
+    fn = _FN_KEYS_F1F2 if p['class'] in FN_KEY_F1F2_CLASSES else _FN_KEYS
+    return {
+        'Min. Speaker Vol.': _pick(_MIN_VOL, p['min_speaker_vol']),
+        'Min. Headset Vol.': _pick(_MIN_VOL, p['min_headset_vol']),
+        'Beep Volume': _pick(['<mute>'] + _MIN_VOL, p['beep_vol']),
+        'Beep on Call Duration': '%d ms' % p['beep_on_call_ms'],
+        'Speaker Dim level': _pick(['0 dB', '-3 dB', '-6 dB', '-9 dB', '-12 dB', '-18 dB', '-24 dB', 'mute'],
+                                   p['speaker_dim']),
+        'Initial single volume': _pick(_INIT_VOL, p['init_single_vol']),
+        'Initial IFB volume': _pick(_INIT_VOL, p['init_ifb_vol']),
+        'Initial conference volume': _pick(_INIT_VOL, p['init_conf_vol']),
+        'Fn key assignment': fn.get(p['fn_key_assignment'], 'value %d' % p['fn_key_assignment']),
+        'VOX ON threshold': 'permanent' if p['vox_on'] == 25 else '%d dBu' % on,
+        'VOX OFF threshold': '' if p['vox_on'] == 25 else '%d dBu' % (on - 3 - 2 * p['vox_off']),
+        'VOX hold time': 'no delay' if p['vox_hold'] == 0xff else '%d ms' % (50 << p['vox_hold']),
+        'Headset mode': {1: 'Standard', 2: 'Lock on speaker mode', 3: 'Lock on headset mode'}.get(
+            p['headset_mode_lock'], 'value %d' % p['headset_mode_lock']),
+        'Intercom key bank': {1: 'Off', 2: 'Lock on key bank 1', 3: 'Lock on key bank 2'}.get(
+            p['keybank_lock'], 'value %d' % p['keybank_lock']),
+        'Brightness of keys': _pick(_PERCENT, p['key_brightness']),
+        'Brightness of LEDs': _pick(_PERCENT, p['led_brightness']),
+        'Rotary mute function': 'enabled' if p['port_flags'] & 0x2000 else 'disabled',
+        'Response Timeout': '%d ms' % p['response_timeout_ms'],
+    }
 
 
 def room_code_label(code):

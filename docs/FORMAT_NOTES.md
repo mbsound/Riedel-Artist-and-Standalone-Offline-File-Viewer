@@ -195,7 +195,21 @@ The next record's header repeats the owner. The owner is the endpoint object id.
   - Port Type = `PORT_TYPE_NAMES[class]`. 2-wire, 4-wire and network in/out ports add the card interface: Coax card → AES, Audio → AIO, AES67 → AES67, Dante → Dante, MADI → nothing.
   - Node-Bay = node name (`node_500`) - Bay slot+1. SIC frames add (`sic_u8`); a `CPhysClientSubSic` card resolves to its parent card through `base_58`.
   - IP columns: `port_214` picks the interface (0 → Media 1, 1 → Media 2). `stream_rx` fills Input Media *n*. `stream_tx`, `audio_settings` or `output_media_2` fill Output Media *n*.
-  - Not yet located, because every value is the default in this file: Input/Output Gain, Keypad Shortcut. Device, Active Source Channel and Status are live state.
+  - Input/Output Gain = bytes +0x1c4/+0x1c5: (byte − 36) / 2 dB.
+  - **Panel settings** (Port Defaults 1/2 dialogs; list-fill `FUN_00bd8910`/`FUN_00bda2f0`, store `FUN_00bd8590`/`FUN_00bd9d00`): all 18 were confirmed by one test save that changed every setting on port 2.6. Decoded by `panel_settings()`:
+    - Min speaker/headset volume: −45…0 dB in 3 dB steps.
+    - Beep volume: `<mute>` + that list.
+    - Speaker dim: 0/−3/−6/−9/−12/−18/−24 dB/mute.
+    - Initial single/IFB/conference volume: +6…−24 dB/mute.
+    - VOX ON: 12 − 2i dBu; 25 = permanent.
+    - VOX OFF: ON − 3 − 2i dBu.
+    - VOX hold: 50·2^i ms; 0xFF = no delay.
+    - Keys/LED brightness: (i + 1) × 10 %.
+    - Fn key assignment (+0x388): the item-data value.
+    - Key bank lock (+0x1cc) and headset mode (+0x1d0): 1–3.
+    - Rotary mute: `port_flags` bit 13.
+    - Beep on call duration and response timeout: plain ms.
+  - Not yet located, because every value is the default in this file: Keypad Shortcut. Device, Active Source Channel and Status are live state.
 - **Conferences/groups**: label, alias, members + per-member flags, GPIO trigger, trunk address, long name.
 - **Audio patches**: a fixed 67-element DSP chain (36 crosspoints, amps, band-passes, limiters, switch).
 - **Events** (`FUN_00c605c0`): active flag, name, actions (7 types, `CEvAct*`).

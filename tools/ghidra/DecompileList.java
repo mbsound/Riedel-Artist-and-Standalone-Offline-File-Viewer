@@ -44,6 +44,9 @@ public class DecompileList extends GhidraScript {
             Address a = toAddr(Long.parseLong(p[1].replace("0x", ""), 16));
             Function f = fm.getFunctionAt(a);
             if (f == null) {
+                f = fm.getFunctionContaining(a);   // an address inside a function also works
+            }
+            if (f == null) {
                 f = createFunction(a, null);
             }
             if (f == null) {
