@@ -989,7 +989,7 @@ def read_port(ar, o, pool_state=0):
         o['port_2cc'], n = ar.u8(), ar.u8()
     ar.skip(4 * n)
     o['port_1b0'], o['port_1b1'], o['port_1b2'] = ar.u8(), ar.u8(), ar.u8()
-    o['room_code'] = ar.u8()                             # +0x2f4, confirmed; 0 = <not assigned>
+    o['room_code'] = ar.u8()                             # +0x2f4, confirmed; see room_code_label()
     if v < 0x2e:
         ar.u8(); ar.u8()
     o['port_number'] = ar.u16()                          # +0x288
@@ -1116,6 +1116,13 @@ PORT_TYPE_NAMES = {
 # Audio ports (2-wire, 4-wire, network in/out) get the card's interface in brackets, e.g. '4-Wire (AIO)'.
 AUDIO_PORT_CLASSES = {0x401, 0x402, 0x403, 0x438, 0x439, 0x441, 0x442}
 CARD_INTERFACE = {0x101: 'AES', 0x103: 'AIO', 0x109: 'AES67', 0x10b: 'AES67', 0x10a: 'Dante', 0x10f: 'Dante'}
+
+
+def room_code_label(code):
+    """Stored room code -> Director's value: 0 = <not assigned>, 1-26 = A-Z, 27-254 = 1-228 (confirmed)."""
+    if not code:
+        return '<not assigned>'
+    return chr(ord('A') + code - 1) if code <= 26 else str(code - 26)
 
 
 def port_card(port, byid):
