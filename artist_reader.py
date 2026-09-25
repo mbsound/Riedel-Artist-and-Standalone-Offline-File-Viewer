@@ -1030,7 +1030,10 @@ def read_port(ar, o, pool_state=0):
         ar.u8()
     if v < 0x2e:
         ar.skip(3)
-    o['port_1c1_5'] = ar._take(5).hex()
+    b5 = ar._take(5)
+    o['port_1c1_5'] = b5[:3].hex()
+    # Confirmed 2026-09-25: gain byte g -> (g - 36) / 2 dB (0 = -18 dB, 36 = 0 dB, 72 = +18 dB).
+    o['input_gain_db'], o['output_gain_db'] = (b5[3] - 36) / 2, (b5[4] - 36) / 2
     if v < 0x2e:
         ar.skip(2)
     if v >= 0x27:

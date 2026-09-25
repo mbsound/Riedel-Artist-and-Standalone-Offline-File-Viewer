@@ -39,6 +39,8 @@ def decoded(port, byid):
         'Node-Bay': A.port_node_bay(port, byid),
         'Port Type': A.port_type(port, byid),
         'Trunking object address': str(port['trunk_address']),
+        'Input Gain': '%+.1f' % port['input_gain_db'],
+        'Output Gain': '%+.1f' % port['output_gain_db'],
         'Room Code': ('Room ' if port['room_code'] else '') + A.room_code_label(port['room_code']),
     }
     for col in IP_COLS:
@@ -70,7 +72,7 @@ def main(art, csv_path):
             continue
         types[names.get(p['class'], hex(p['class']))].add(row['Port Type'].strip())
         for col, val in decoded(p, byid).items():
-            if val is None:
+            if val is None or (col.endswith('Gain') and row[col] == ''):   # gain column hidden for this type
                 continue
             if norm(val) != norm(row[col]):
                 print('%-32s %-28s file=%r director=%r' % (row['Long Name'], col, val, row[col]))
