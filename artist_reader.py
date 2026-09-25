@@ -1097,6 +1097,45 @@ def read_port(ar, o, pool_state=0):
         o['port_338'] = ar.u16()
 
 
+# Director's 'Port Type' column (checked against the Ports grid export, docs/director_exports/crazy_ports.csv).
+PORT_TYPE_NAMES = {
+    0x401: '2-Wire Input', 0x402: '2-Wire Output', 0x403: '4-Wire', 0x405: 'DCP-1016E', 0x406: 'RCP-1012E',
+    0x407: 'RCP-1028E', 0x408: 'Telephone codec', 0x40a: 'DBM-1004E', 0x40d: 'RCP-2016P', 0x410: 'DCP-2016P',
+    0x412: 'RCP-3016P', 0x414: 'DCP-3016P', 0x416: 'C3 Beltpack', 0x417: 'RIF-1032', 0x41a: 'RCP-2116P',
+    0x41d: 'DCP-2116P', 0x41e: 'Aurus Panel', 0x420: 'DCP-5008', 0x421: 'DCP-5108', 0x424: 'RCP-1112',
+    0x425: 'RCP-1128', 0x426: 'DCP-1116', 0x428: 'VCP-1004', 0x429: 'VCP-1012', 0x430: 'WB-2 Beltpack',
+    0x432: 'CCP-1116', 0x434: 'RSP-2318 Pro', 0x435: 'RSP-2318 Plus', 0x436: 'RSP-2318 Basic', 0x438: 'Input',
+    0x439: 'Output', 0x440: 'Bolero Wireless Beltpack', 0x441: 'Input', 0x442: 'Output', 0x443: 'DSP-2312 Plus',
+    0x444: 'DSP-2312 Basic', 0x445: 'AES67 Trunkline', 0x502: 'Sip Phone', 0x505: 'RSP-1232HL',
+    0x506: 'RSP-1216HL', 0x508: 'VoIP Connection', 0x513: 'NSA Split Connection', 0x514: 'NSA Split Connection',
+    0x515: 'NSA Connection', 0x517: 'DSP-1216HL'}
+# Audio ports (2-wire, 4-wire, network in/out) get the card's interface in brackets, e.g. '4-Wire (AIO)'.
+AUDIO_PORT_CLASSES = {0x401, 0x402, 0x403, 0x438, 0x439, 0x441, 0x442}
+CARD_INTERFACE = {0x101: 'AES', 0x103: 'AIO', 0x109: 'AES67', 0x10b: 'AES67', 0x10a: 'Dante', 0x10f: 'Dante'}
+
+
+def port_card(port, byid):
+    """The bay card a port sits on (a CPhysClientSubSic is resolved to its parent SIC card)."""
+    card = byid[port['card']]
+    return byid[card['base_58']] if card['class'] == 0x10d else card
+
+
+def port_type(port, byid):
+    name = PORT_TYPE_NAMES.get(port['class'], 'class 0x%x' % port['class'])
+    iface = CARD_INTERFACE.get(port_card(port, byid)['class']) if port['class'] in AUDIO_PORT_CLASSES else None
+    return '%s (%s)' % (name, iface) if iface else name
+
+
+def port_node_bay(port, byid):
+    """Director's 'Node-Bay': 'Node #3 (4) - Bay 12', or 'Node #6 (7) - Bay 4 (8)' on SIC frames."""
+    card = port_card(port, byid)
+    node = byid[card['node']]
+    bay = 'Bay %d' % (card['slot'] + 1)
+    if 'sic_u8' in card:
+        bay += ' (%d)' % card['sic_u8']
+    return '%s (%d) - %s' % (node['name'], node['node_500'], bay)
+
+
 # Expansion panels: key slots stored = vtable+0xc0 x vtable+0xc8 (tools/class_consts.py 0xc0 0xc8).
 EXPANSION_SLOTS = {0x00b: 32, 0x40b: 12, 0x40c: 32, 0x40e: 32, 0x40f: 32, 0x411: 32, 0x413: 32,
                    0x415: 32, 0x418: 32, 0x419: 24, 0x427: 32, 0x431: 16, 0x433: 12, 0x437: 48,

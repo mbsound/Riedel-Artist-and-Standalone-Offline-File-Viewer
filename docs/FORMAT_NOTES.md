@@ -184,10 +184,21 @@ The next record's header repeats the owner. The owner is the endpoint object id.
 - **Frames** (`CPhysNode` `FUN_00ca2500`): 18 slot object ids plus each slot's class code, 2 controllers, 2 PSUs, net id, name.
 - **Expansions** (`FUN_00c65490`): expansion id, key-slot ids (rows × columns per model), **host panel id**.
 - **Ports/panels** (`FUN_00cad990`): one shared record for all port and panel types, with optional sub-blocks (audio stream settings, AES67/Dante streams, 12xx/23xx panel UI properties), selected by flag bits and class code.
+  **Checked against Director's Ports grid** (copied as CSV: `docs/director_exports/crazy_ports.csv`; run `tools/check_ports_csv.py`). All 160 ports of Artist CRAZY match in 11 columns:
+  - Long Name = `port_str`
+  - Local 8-char Label = `name`
+  - Alias = `alias`
+  - Subtitle = `port_str2`
+  - Port = `port_strings[1]`
+  - Trunking object address = `trunk_address`
+  - Port Type = `PORT_TYPE_NAMES[class]`. 2-wire, 4-wire and network in/out ports add the card interface: Coax card → AES, Audio → AIO, AES67 → AES67, Dante → Dante, MADI → nothing.
+  - Node-Bay = node name (`node_500`) - Bay slot+1. SIC frames add (`sic_u8`); a `CPhysClientSubSic` card resolves to its parent card through `base_58`.
+  - IP columns: `port_214` picks the interface (0 → Media 1, 1 → Media 2). `stream_rx` fills Input Media *n*. `stream_tx`, `audio_settings` or `output_media_2` fill Output Media *n*.
+  - Not yet located, because every value is the default in this file: Input/Output Gain, Room Code, Keypad Shortcut. Device, Active Source Channel and Status are live state.
 - **Conferences/groups**: label, alias, members + per-member flags, GPIO trigger, trunk address, long name.
 - **Audio patches**: a fixed 67-element DSP chain (36 crosspoints, amps, band-passes, limiters, switch).
 - **Events** (`FUN_00c605c0`): active flag, name, actions (7 types, `CEvAct*`).
-- Readers for classes that none of the samples contain (remaining command types, virtual keys, VoIP/NSA devices) are transcribed but untested. **ZMXIF (`0x48`) and the MCR family (`0x4a`, `0x53`–`0x58`, `0x5b`, `0x64`) are not transcribed yet.**
+- Readers for classes that none of the samples contain (remaining command types, virtual keys, VoIP/NSA devices) are transcribed but untested. **ZMXIF (`0x48`) is not transcribed yet. The MCR family (`0x4a`, `0x53`–`0x58`, `0x5b`, `0x64`) is out of scope (a rare licence) and raises a clear error.**
 
 Tools: `tools/ghidra/DecompileSerializers.java` (Ghidra 12 headless, types `CArchive`, names MFC helpers), `tools/reduce_decomp.py` and `tools/dedupe_decomp.py` (make the output readable), `tools/class_codes.py`, `tools/class_consts.py` (per-class constants such as key rows/columns), `tools/dre.py` (capstone helpers).
 
