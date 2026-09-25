@@ -39,6 +39,7 @@ def decoded(port, byid):
         'Node-Bay': A.port_node_bay(port, byid),
         'Port Type': A.port_type(port, byid),
         'Trunking object address': str(port['trunk_address']),
+        'Room Code': ('Room ' if port['room_code'] else '') + A.room_code_label(port['room_code']),
     }
     for col in IP_COLS:
         d[col] = ''
