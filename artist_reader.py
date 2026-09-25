@@ -1550,6 +1550,8 @@ def read_nsa_device(ar, o):
 
 # Classes whose Serialize does not call CPhysObj::Serialize at the end (no trailing base record).
 NO_BASE_TRAILER = {0x087, 0x070}
+# Master Control Room (MCR) licence objects: deliberately out of scope (rare licence, never seen in real files).
+MCR_CLASSES = {0x04a, 0x053, 0x054, 0x055, 0x056, 0x057, 0x058, 0x05b, 0x064}
 
 # Command types not present in the sample files: transcribed from Director, untested on real data.
 def _cmd_word(ar, o):
@@ -1808,6 +1810,9 @@ def parse_art(data):
     recs, stop = read_objects(ar, objs)
     if stop:
         cls, oid, grp, pos = stop
+        if cls in MCR_CLASSES:
+            raise ArtFormatError('file uses Master Control Room (MCR) objects (class 0x%x), which this '
+                                 'extractor does not support' % cls)
         raise ArtFormatError('no reader for class 0x%x (%s) at 0x%x' % (cls, grp, pos))
     end = ar.wstring()
     if end != 'ENDE' or ar.p != len(data):
