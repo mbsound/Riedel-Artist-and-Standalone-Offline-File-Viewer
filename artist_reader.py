@@ -988,7 +988,8 @@ def read_port(ar, o, pool_state=0):
     else:
         o['port_2cc'], n = ar.u8(), ar.u8()
     ar.skip(4 * n)
-    o['port_1b0'], o['port_1b1'], o['port_1b2'], o['port_2f4'] = ar.u8(), ar.u8(), ar.u8(), ar.u8()
+    o['port_1b0'], o['port_1b1'], o['port_1b2'] = ar.u8(), ar.u8(), ar.u8()
+    o['room_code'] = ar.u8()                             # +0x2f4, confirmed; 0 = <not assigned>
     if v < 0x2e:
         ar.u8(); ar.u8()
     o['port_number'] = ar.u16()                          # +0x288
@@ -1021,6 +1022,9 @@ def read_port(ar, o, pool_state=0):
     elif v >= 0x2d:
         o['port_1b6'] = ar.u8()
         flags = o['port_flags'] = ar.u32()
+        # Room code mode (2026-09-25 test save): bit 8 set on a speaker-mode panel and on 4-wires,
+        # bit 9 = headset mode. Some panels with a room code have neither bit (still unexplained).
+        o['room_speaker_bit'], o['room_headset_bit'] = (flags >> 8) & 1, (flags >> 9) & 1
     o['port_1b7'], o['port_1b8'] = ar.u8(), ar.u8()
     if v > 0x25:
         ar.u8()
