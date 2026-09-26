@@ -834,6 +834,11 @@ def read_net(ar, o):
         o['net_7ec'] = ar.u8() != 0
 
 
+# Frame type (+0x4f8) -> Director's name (FUN_009de1c0). Confirmed: 3/4/5/6/7/9 in the sample files.
+NODE_TYPE_NAMES = {0: 'Artist M', 1: 'Artist S', 2: 'Artist 1D', 3: 'Artist 32', 4: 'Artist 64', 5: 'Artist 128',
+                   6: 'Performer 32-16', 7: 'Performer 32-80', 9: 'Artist 1024'}
+
+
 def read_node(ar, o):
     """CPhysNode (0x03) FUN_00ca2500: an Artist frame."""
     v = ar.version
@@ -856,7 +861,7 @@ def read_node(ar, o):
     o['node_4fc'], o['node_4fe'] = ar.u16(), ar.u16()
     ar.u32(); ar.u16(); ar.u32(); ar.u32()               # written as zeros
     o['node_90'] = ar.i32()
-    o['node_4f8'] = ar.i32() if v >= 0x24 else 0
+    o['node_type'] = ar.i32() if v >= 0x24 else 0      # +0x4f8, see NODE_TYPE_NAMES
     if v > 0x2f:
         o['name'] = ar.string()
 
