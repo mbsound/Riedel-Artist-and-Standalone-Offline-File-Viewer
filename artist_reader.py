@@ -1230,7 +1230,7 @@ EXPANSION_SLOTS = {0x00b: 32, 0x40b: 12, 0x40c: 32, 0x40e: 32, 0x40f: 32, 0x411:
 
 
 # Expansion panel names (confirmed 2026-09-26 on Node #4 Bay 2 of Artist CRAZY).
-EXPANSION_NAMES = {0x413: 'ECP-3016P', 0x415: 'DCP-3016PS', 0x418: 'RIF-1032'}
+EXPANSION_NAMES = {0x413: 'ECP-3016P', 0x415: 'DCP-3016PS', 0x418: 'RIF-1032', 0x419: 'ECP-1012EP'}
 
 
 def read_expansion(ar, o):
@@ -1239,6 +1239,7 @@ def read_expansion(ar, o):
     if v < 0x2c:
         o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
     o['expansion_id'] = ar.i32()                         # +0x188
+    o['expansion_address'] = o['expansion_id'] - 1       # Director's 'address' (stored 4 = address 3, confirmed)
     if v < 0x2c:
         ar.u32()
     o['key_slots'] = [ar.u32() for _ in range(EXPANSION_SLOTS[o['class']])]   # CPhysKey ids
