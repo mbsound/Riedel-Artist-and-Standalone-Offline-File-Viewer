@@ -1426,6 +1426,11 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
                     [('bandpass', 2)] * 6 + [('limiter', 8)] * 4 + [('amp_out', 2)] * 6)
 
 
+# Crosspoint names, by index in the 36-crosspoint block. Default patches leave only #4 and #24 unmuted.
+# Confirmed 2026-09-26: muting Panel Mic -> Matrix Channel A on port 1.1 set #4 in both patches.
+AUDIOPATCH_CROSSPOINT_NAMES = {4: 'Panel Mic -> Matrix Channel A'}
+
+
 def read_audiopatch(ar, o):
     """CPhysAudiopatch (0x19) FUN_00c1ff70: per-port mixing / DSP matrix."""
     v = ar.version
@@ -1438,7 +1443,7 @@ def read_audiopatch(ar, o):
     for kind, size in AUDIOPATCH_CHAIN:
         b = ar._take(size)
         if kind == 'crosspoint':
-            els.append({'kind': kind, 'level': b[0], 'on': b[1] >> 7})
+            els.append({'kind': kind, 'level': b[0], 'muted': b[1] >> 7})   # bit 7 = muted (confirmed)
         elif kind in ('amp_in', 'amp_out'):
             els.append({'kind': kind, 'gain': b[0], 'flag': b[1] >> 7})
         else:
