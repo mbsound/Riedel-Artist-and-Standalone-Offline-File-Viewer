@@ -1458,9 +1458,12 @@ LIMCOMP_FIELDS = [('Limiter Attack', _ATTACK), ('Limiter Release', _RELEASE),
                   ('Compressor Attack', _ATTACK), ('Compressor Release', _RELEASE),
                   ('Compressor Ratio', ['1:1', '1.25:1', '1.6:1', '2.5:1', '4:1', '8:1']),
                   ('Compressor Threshold', ['%d dB' % v for v in range(12, -51, -3)])]
-# Element names (index in the 67-element chain). Confirmed: 36, 37, 39, 43, 47 on port 1.1.
-AUDIOPATCH_ELEMENT_NAMES = {36: 'External Mic preamp', 37: 'Headset A preamp', 39: 'Panel Mic/Headset A amp',
-                            43: 'Panel Mic/Headset A bandpass', 47: 'Panel Mic/Headset A limiter/compressor'}
+# Element names (index in the 67-element chain). Confirmed on port 1.1: 36, 37, 39, 40, 43, 44, 47, 48.
+AUDIOPATCH_ELEMENT_NAMES = {36: 'External Mic preamp', 37: 'Headset A preamp',
+                            39: 'Panel Mic/Headset A amp', 40: 'External Mic/Headset B amp',
+                            43: 'Panel Mic/Headset A bandpass', 44: 'External Mic/Headset B bandpass',
+                            47: 'Panel Mic/Headset A limiter/compressor',
+                            48: 'External Mic/Headset B limiter/compressor'}
 
 
 def audiopatch_element_text(el):
@@ -1476,7 +1479,7 @@ def audiopatch_element_text(el):
         g = '0 dB' if el['gain'] == 0 else 'step -%d' % el['gain']      # non-zero steps not yet mapped to dB
         return g + (', muted' if el['muted'] else '')
     if k == 'bandpass':
-        hp, lp = el['values']
+        lp, hp = el['values']                            # stored low pass first (confirmed: HP 200 Hz -> [0, 8])
         return 'HP %s, LP %s' % (_pick(BANDPASS_HP, hp), _pick(BANDPASS_LP, lp))
     if k == 'limiter':
         return ', '.join('%s %s' % (n, _pick(t, v)) for (n, t), v in zip(LIMCOMP_FIELDS, el['values']))
