@@ -1458,8 +1458,8 @@ LIMCOMP_FIELDS = [('Limiter Attack', _ATTACK), ('Limiter Release', _RELEASE),
                   ('Compressor Attack', _ATTACK), ('Compressor Release', _RELEASE),
                   ('Compressor Ratio', ['1:1', '1.25:1', '1.6:1', '2.5:1', '4:1', '8:1']),
                   ('Compressor Threshold', ['%d dB' % v for v in range(12, -51, -3)])]
-# Element names (index in the 67-element chain). Confirmed: 37, 39, 43, 47 on port 1.1.
-AUDIOPATCH_ELEMENT_NAMES = {37: 'Headset A preamp', 39: 'Panel Mic/Headset A amp',
+# Element names (index in the 67-element chain). Confirmed: 36, 37, 39, 43, 47 on port 1.1.
+AUDIOPATCH_ELEMENT_NAMES = {36: 'External Mic preamp', 37: 'Headset A preamp', 39: 'Panel Mic/Headset A amp',
                             43: 'Panel Mic/Headset A bandpass', 47: 'Panel Mic/Headset A limiter/compressor'}
 
 
@@ -1469,7 +1469,7 @@ def audiopatch_element_text(el):
     if k == 'crosspoint':
         return 'muted' if el['muted'] else 'on'
     if k == 'amp20db':
-        return 'Dynamic (+20 dB)' if el['values'][0] else 'Standard'
+        return 'Dynamic (+20 dB)' if el['values'][0] else 'Electret'      # confirmed both ways
     if k == 'amp_in':
         return '%+.1f dB%s' % (el['gain'] / 2, ', muted' if el['muted'] else '')
     if k == 'amp_out':
