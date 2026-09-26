@@ -838,6 +838,26 @@ def read_net(ar, o):
 NODE_TYPE_NAMES = {0: 'Artist M', 1: 'Artist S', 2: 'Artist 1D', 3: 'Artist 32', 4: 'Artist 64', 5: 'Artist 128',
                    6: 'Performer 32-16', 7: 'Performer 32-80', 9: 'Artist 1024'}
 
+# Power supplies are all CPhysPowerSupply; Director names them from the frame type (confirmed for Performer).
+PSU_NAMES = {3: 'PSU-32 G2', 4: 'PSU-64 G2', 5: 'PSU-128 G2', 6: 'PSU-32+16', 7: 'PSU-32+80', 9: 'PSU-1024'}
+# Card model names on Performer frames (confirmed 2026-09-26 on Performer 32-16 / 32-80).
+PERFORMER_CARD_NAMES = {0x101: 'COAX-008', 0x102: 'CAT5-008', 0x103: 'AIO-008', 0x108: 'VoIP-008',
+                        0x201: 'ELA-OP-016', 0x052: 'CPU-032', 0x06a: 'CPU-032M'}
+# Artist frames: the same classes are the -108 cards; G2 / -208 variants are not yet told apart.
+ARTIST_CARD_NAMES = {0x101: 'COAX-108', 0x102: 'CAT5-108 / AES-108', 0x103: 'AIO-108', 0x107: 'MADI-108',
+                     0x108: 'VoIP-108', 0x109: 'AES67-108', 0x10a: 'DANTE-108', 0x201: 'GPIO card',
+                     0x037: 'CPU-128F', 0x038: 'CPU-128HP', 0x039: 'CPU-128S', 0x04c: 'CPU-128SD1',
+                     0x050: 'CPU-128S G2', 0x051: 'CPU-128F G2'}
+
+
+def card_model(card, node):
+    """Model name of a bay card, CPU or PSU as Director shows it, given the node it sits in."""
+    if card['class'] == 0x00f:                           # CPhysPowerSupply
+        return PSU_NAMES.get(node['node_type'], 'PSU')
+    if node['node_type'] in (6, 7):
+        return PERFORMER_CARD_NAMES.get(card['class'], 'class 0x%x' % card['class'])
+    return ARTIST_CARD_NAMES.get(card['class'], 'class 0x%x' % card['class'])
+
 
 def read_node(ar, o):
     """CPhysNode (0x03) FUN_00ca2500: an Artist frame."""
