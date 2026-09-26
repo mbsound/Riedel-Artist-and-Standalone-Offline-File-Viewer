@@ -1133,7 +1133,7 @@ def read_port(ar, o, pool_state=0):
 # Director's 'Port Type' column (checked against the Ports grid export, docs/director_exports/crazy_ports.csv).
 PORT_TYPE_NAMES = {
     0x401: '2-Wire Input', 0x402: '2-Wire Output', 0x403: '4-Wire', 0x405: 'DCP-1016E', 0x406: 'RCP-1012E',
-    0x407: 'RCP-1028E', 0x408: 'Telephone codec', 0x40a: 'DBM-1004E', 0x40d: 'RCP-2016P', 0x410: 'DCP-2016P',
+    0x407: 'RCP-1028E', 0x408: 'Telephone codec', 0x409: 'RIF-2064', 0x40a: 'DBM-1004E', 0x40d: 'RCP-2016P', 0x410: 'DCP-2016P',
     0x412: 'RCP-3016P', 0x414: 'DCP-3016P', 0x416: 'C3 Beltpack', 0x417: 'RIF-1032', 0x41a: 'RCP-2116P',
     0x41d: 'DCP-2116P', 0x41e: 'Aurus Panel', 0x420: 'DCP-5008', 0x421: 'DCP-5108', 0x424: 'RCP-1112',
     0x425: 'RCP-1128', 0x426: 'DCP-1116', 0x428: 'VCP-1004', 0x429: 'VCP-1012', 0x430: 'WB-2 Beltpack',
