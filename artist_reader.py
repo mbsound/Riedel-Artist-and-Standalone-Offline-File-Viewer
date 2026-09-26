@@ -1428,7 +1428,7 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
 
 # Crosspoint names, by index in the 36-crosspoint block. Default patches leave only #4 and #24 unmuted.
 # Confirmed 2026-09-26: muting Panel Mic -> Matrix Channel A on port 1.1 set #4 in both patches.
-AUDIOPATCH_CROSSPOINT_NAMES = {4: 'Panel Mic -> Matrix Channel A', 24: 'Matrix Channel 1 -> Speaker Out'}
+AUDIOPATCH_CROSSPOINT_NAMES = {4: 'Panel Mic -> Matrix Channel A', 24: 'Matrix Channel 1 -> Speaker/Headset Out'}  # speaker and headset share output 0
 
 
 def read_audiopatch(ar, o):
