@@ -1242,9 +1242,10 @@ def read_expansion(ar, o):
 
 
 def read_cdm102(ar, o):
-    """CPhysCDM102 FUN_00c23fa0: two short strings, then the normal port record."""
+    """CPhysCDM102 (telephone codec) FUN_00c23fa0: two phone numbers, then the normal port record."""
     if ar.version > 0x36:
-        o['cdm_a'], o['cdm_b'] = old_string(ar), old_string(ar)
+        # Confirmed 2026-09-26: Telephone number (1st channel) and 2nd channel, u8 length + ANSI.
+        o['phone_number_1'], o['phone_number_2'] = old_string(ar), old_string(ar)
         read_port(ar, o, pool_state=2)
     else:
         read_port(ar, o)
