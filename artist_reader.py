@@ -1443,6 +1443,46 @@ AUDIOPATCH_CROSSPOINT_NAMES = {i * 6 + o: '%s -> %s' % (AUDIOPATCH_INPUTS[i], AU
                                for i in range(6) for o in range(6)}
 
 
+# DSP option lists, from Director's option-list functions (0x611xxx-0x61exxx), stored as list positions.
+# Confirmed 2026-09-26 by a test save that set every field of port 1.1's first input chain.
+BANDPASS_HP = ['off', '40 Hz', '50 Hz', '63 Hz', '80 Hz', '100 Hz', '125 Hz', '160 Hz', '200 Hz', '250 Hz', '320 Hz',
+               '400 Hz', '500 Hz', '640 Hz']
+BANDPASS_LP = ['off', '16 kHz', '12.8 kHz', '10 kHz', '8 kHz', '6.4 kHz', '5 kHz', '4 kHz', '3.2 kHz', '2.5 kHz', '2 kHz',
+               '1.6 kHz', '1.25 kHz', '1 kHz']
+_ATTACK = ['100 µs', '200 µs', '500 µs', '1 ms', '2 ms', '5 ms', '10 ms', '20 ms', '50 ms', '100 ms']
+_RELEASE = ['10 ms', '20 ms', '50 ms', '100 ms', '200 ms', '500 ms', '1 s']
+# Limiter/compressor bytes in stored order -> (Director field, option list).
+LIMCOMP_FIELDS = [('Limiter Attack', _ATTACK), ('Limiter Release', _RELEASE),
+                  ('Limiter Threshold', ['6 dBr', '3 dBr', '0 dBr', '-3 dBr', '-6 dBr']),
+                  ('Limiter Output Level', ['%d dBU' % v for v in range(-33, 15, 3)]),
+                  ('Compressor Attack', _ATTACK), ('Compressor Release', _RELEASE),
+                  ('Compressor Ratio', ['1:1', '1.25:1', '1.6:1', '2.5:1', '4:1', '8:1']),
+                  ('Compressor Threshold', ['%d dB' % v for v in range(12, -51, -3)])]
+# Element names (index in the 67-element chain). Confirmed: 37, 39, 43, 47 on port 1.1.
+AUDIOPATCH_ELEMENT_NAMES = {37: 'Headset A preamp', 39: 'Panel Mic/Headset A amp',
+                            43: 'Panel Mic/Headset A bandpass', 47: 'Panel Mic/Headset A limiter/compressor'}
+
+
+def audiopatch_element_text(el):
+    """One DSP element's settings in Director's wording."""
+    k = el['kind']
+    if k == 'crosspoint':
+        return 'muted' if el['muted'] else 'on'
+    if k == 'amp20db':
+        return 'Dynamic (+20 dB)' if el['values'][0] else 'Standard'
+    if k == 'amp_in':
+        return '%+.1f dB%s' % (el['gain'] / 2, ', muted' if el['muted'] else '')
+    if k == 'amp_out':
+        g = '0 dB' if el['gain'] == 0 else 'step -%d' % el['gain']      # non-zero steps not yet mapped to dB
+        return g + (', muted' if el['muted'] else '')
+    if k == 'bandpass':
+        hp, lp = el['values']
+        return 'HP %s, LP %s' % (_pick(BANDPASS_HP, hp), _pick(BANDPASS_LP, lp))
+    if k == 'limiter':
+        return ', '.join('%s %s' % (n, _pick(t, v)) for (n, t), v in zip(LIMCOMP_FIELDS, el['values']))
+    return str(el.get('values'))
+
+
 def audiopatch_routes(patch):
     """Unmuted crosspoints and muted output amps of one audio patch, in Director's names."""
     els = patch['elements']
@@ -1469,7 +1509,7 @@ def read_audiopatch(ar, o):
         elif kind == 'amp_out':
             els.append({'kind': kind, 'gain': b[0], 'muted': b[1] >> 7})   # bit 7 = muted (confirmed on #0 and #2)
         elif kind == 'amp_in':
-            els.append({'kind': kind, 'gain': b[0], 'flag': b[1] >> 7})
+            els.append({'kind': kind, 'gain': b[0], 'muted': b[1] >> 7})   # gain 0.5 dB steps from 0 dB (confirmed)
         else:
             els.append({'kind': kind, 'values': list(b)})
     o['elements'] = els
