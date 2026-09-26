@@ -1433,12 +1433,23 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
 # Output amps (6, after the limiters): #0 = panel speaker, #2 = headset. Default Speaker-mode patches mute #2,
 # Headset-mode patches mute #0 (confirmed 2026-09-26: muting the speaker / unmuting the headset in port 1.1's Speaker patch).
 AUDIOPATCH_AMP_OUT_NAMES = {0: 'Speaker', 2: 'Headset'}
-# Looks like a 6 x 6 grid, index = input * 6 + output (inputs: 0 Panel Mic .. 4 Matrix Ch.1; outputs: 0 Speaker/Headset,
-# 1 External Out/Headset B, 2 Audio Out A, 3 Audio Out B, 4 Matrix Ch.1 (A), 5 Matrix Ch.2). Speaker and headset share output 0.
-AUDIOPATCH_CROSSPOINT_NAMES = {4: 'Panel Mic -> Matrix Channel 1 (A)', 24: 'Matrix Channel 1 -> Speaker/Headset Out',
-                               25: 'Matrix Channel 1 -> External Out/Headset B', 26: 'Matrix Channel 1 -> Audio Out A',
-                               27: 'Matrix Channel 1 -> Audio Out B', 28: 'Matrix Channel 1 -> Matrix Channel 1 (A)',
-                               29: 'Matrix Channel 1 -> Matrix Channel 2'}   # output 5 needs the 2nd audio channel
+# The 36 crosspoints are a 6 x 6 grid, index = input * 6 + output (confirmed 2026-09-26 by test saves of #4,
+# #24-#29 on port 1.1; row/column names as Director shows them). Speaker and headset share input 0 and output 0.
+AUDIOPATCH_INPUTS = ['Panel Mic + Headset A', 'External Mic + Headset B', 'Audio In A', 'Audio In B',
+                     'Matrix Ch. 1', 'Matrix Ch. 2']
+AUDIOPATCH_OUTPUTS = ['Speaker/Headset Out', 'External Out/Headset B', 'Audio Out A', 'Audio Out B',
+                      'Matrix Ch. 1', 'Matrix Ch. 2']                    # Matrix Ch. 2 needs the 2nd audio channel
+AUDIOPATCH_CROSSPOINT_NAMES = {i * 6 + o: '%s -> %s' % (AUDIOPATCH_INPUTS[i], AUDIOPATCH_OUTPUTS[o])
+                               for i in range(6) for o in range(6)}
+
+
+def audiopatch_routes(patch):
+    """Unmuted crosspoints and muted output amps of one audio patch, in Director's names."""
+    els = patch['elements']
+    routes = [AUDIOPATCH_CROSSPOINT_NAMES[i] for i in range(36) if not els[i]['muted']]
+    amps = [e for e in els if e['kind'] == 'amp_out']
+    muted_outs = [AUDIOPATCH_AMP_OUT_NAMES.get(i, 'amp %d' % i) for i, e in enumerate(amps) if e['muted']]
+    return routes, muted_outs
 
 
 def read_audiopatch(ar, o):
