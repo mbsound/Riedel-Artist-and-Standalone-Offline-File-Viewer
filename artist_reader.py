@@ -1429,7 +1429,7 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
 # Crosspoint names, by index in the 36-crosspoint block. Default patches leave only #4 and #24 unmuted.
 # Confirmed 2026-09-26: muting Panel Mic -> Matrix Channel A on port 1.1 set #4 in both patches.
 # Output amps (6, after the limiters): #0 = panel speaker, #2 = headset. Default Speaker-mode patches mute #2,
-# Headset-mode patches mute #0 (confirmed 2026-09-26 by unmuting the headset in port 1.1's Speaker patch).
+# Headset-mode patches mute #0 (confirmed 2026-09-26: muting the speaker / unmuting the headset in port 1.1's Speaker patch).
 AUDIOPATCH_AMP_OUT_NAMES = {0: 'Speaker', 2: 'Headset'}
 AUDIOPATCH_CROSSPOINT_NAMES = {4: 'Panel Mic -> Matrix Channel A', 24: 'Matrix Channel 1 -> Speaker/Headset Out'}  # speaker and headset share output 0
 
@@ -1449,7 +1449,7 @@ def read_audiopatch(ar, o):
         if kind == 'crosspoint':
             els.append({'kind': kind, 'level': b[0], 'muted': b[1] >> 7})   # bit 7 = muted (confirmed)
         elif kind == 'amp_out':
-            els.append({'kind': kind, 'gain': b[0], 'muted': b[1] >> 7})   # bit 7 = muted (confirmed on #2)
+            els.append({'kind': kind, 'gain': b[0], 'muted': b[1] >> 7})   # bit 7 = muted (confirmed on #0 and #2)
         elif kind == 'amp_in':
             els.append({'kind': kind, 'gain': b[0], 'flag': b[1] >> 7})
         else:
