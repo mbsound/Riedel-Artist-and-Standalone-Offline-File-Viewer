@@ -1229,6 +1229,10 @@ EXPANSION_SLOTS = {0x00b: 32, 0x40b: 12, 0x40c: 32, 0x40e: 32, 0x40f: 32, 0x411:
                    0x507: 32}
 
 
+# Expansion panel names (confirmed 2026-09-26 on Node #4 Bay 2 of Artist CRAZY).
+EXPANSION_NAMES = {0x413: 'ECP-3016P', 0x415: 'DCP-3016PS', 0x418: 'RIF-1032'}
+
+
 def read_expansion(ar, o):
     """CPhysDCP1016Eslave::Serialize FUN_00c65490: expansion panels and slave halves."""
     v = ar.version
