@@ -1438,7 +1438,8 @@ def read_audiopatch(ar, o):
         raise ArtFormatError('audio patch before 0x2f not implemented')
     if v < 0x43:
         o['name_old'] = old_string(ar)
-    o['patch_mode'] = ar.u32()                           # +0x84
+    o['patch_mode'] = ar.u32()                           # +0x84: 0 = Speaker mode, 1 = Headset mode (confirmed)
+    o['patch_mode_name'] = {0: 'Speaker mode', 1: 'Headset mode'}.get(o['patch_mode'], o['patch_mode'])
     els = []
     for kind, size in AUDIOPATCH_CHAIN:
         b = ar._take(size)
