@@ -1430,9 +1430,6 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
 
 # Crosspoint names, by index in the 36-crosspoint block. Default patches leave only #4 and #24 unmuted.
 # Confirmed 2026-09-26: muting Panel Mic -> Matrix Channel A on port 1.1 set #4 in both patches.
-# Output amps (6, after the limiters): #0 = panel speaker, #2 = headset. Default Speaker-mode patches mute #2,
-# Headset-mode patches mute #0 (confirmed 2026-09-26: muting the speaker / unmuting the headset in port 1.1's Speaker patch).
-AUDIOPATCH_AMP_OUT_NAMES = {0: 'Speaker', 2: 'Headset'}
 # The 36 crosspoints are a 6 x 6 grid, index = input * 6 + output (confirmed 2026-09-26 by test saves of #4,
 # #24-#29 on port 1.1; row/column names as Director shows them). Speaker and headset share input 0 and output 0.
 AUDIOPATCH_INPUTS = ['Panel Mic + Headset A', 'External Mic + Headset B', 'Audio In A', 'Audio In B',
@@ -1459,13 +1456,24 @@ LIMCOMP_FIELDS = [('Limiter Attack', _ATTACK), ('Limiter Release', _RELEASE),
                   ('Compressor Ratio', ['1:1', '1.25:1', '1.6:1', '2.5:1', '4:1', '8:1']),
                   ('Compressor Threshold', ['%d dB' % v for v in range(12, -51, -3)])]
 # Element names (index in the 67-element chain). Confirmed on port 1.1: 36, 37, 39, 40, 43, 44, 47, 48.
-# The two preamps are shared pairs (Director: 'Panel Mic / External Mic', 'Headset A / B'); confirmed via
-# External Mic -> #36 and Headset A / Headset B -> #37.
-AUDIOPATCH_ELEMENT_NAMES = {36: 'Panel Mic / External Mic preamp', 37: 'Headset A / B preamp',
+# Element names (index in the 67-element chain), laid out as Director's audio patch diagram.
+# Confirmed on port 1.1: 36-40, 43, 44, 47, 48, 59, 61. Headset A and B preamps are one linked preamp (dashed
+# link in the diagram); Panel Mic's preamp is fixed on RCP panels. Switch 38: 1 = mics (Speaker mode),
+# 0 = headsets (Headset mode). Output order Speaker, External Out, Headset A, Headset B, Audio Out A/B is the
+# one that fits amp #0 = Speaker and #2 = Headset A; #1 and #3-#5 not yet confirmed by a save.
+_OUTS = ['Speaker', 'External Out', 'Headset A', 'Headset B', 'Audio Out A', 'Audio Out B']
+AUDIOPATCH_ELEMENT_NAMES = {36: 'External Mic preamp', 37: 'Headset A + B preamp (linked)',
+                            38: 'Mic / headset switch',
                             39: 'Panel Mic/Headset A amp', 40: 'External Mic/Headset B amp',
+                            41: 'Audio In A amp', 42: 'Audio In B amp',
                             43: 'Panel Mic/Headset A bandpass', 44: 'External Mic/Headset B bandpass',
+                            45: 'Audio In A bandpass', 46: 'Audio In B bandpass',
                             47: 'Panel Mic/Headset A limiter/compressor',
                             48: 'External Mic/Headset B limiter/compressor'}
+AUDIOPATCH_ELEMENT_NAMES.update({49 + i: n + ' bandpass' for i, n in enumerate(_OUTS)})
+AUDIOPATCH_ELEMENT_NAMES.update({55 + i: n + ' limiter/compressor' for i, n in enumerate(_OUTS[:4])})
+AUDIOPATCH_ELEMENT_NAMES.update({59 + i: n + ' amp' for i, n in enumerate(_OUTS)})
+AUDIOPATCH_AMP_OUT_NAMES = dict(enumerate(_OUTS))
 
 
 def audiopatch_element_text(el):
@@ -1473,6 +1481,8 @@ def audiopatch_element_text(el):
     k = el['kind']
     if k == 'crosspoint':
         return 'muted' if el['muted'] else 'on'
+    if k == 'switch':
+        return 'Panel Mic / External Mic' if el['values'][0] else 'Headset A / B'
     if k == 'amp20db':
         return 'Dynamic (+20 dB)' if el['values'][0] else 'Electret'      # confirmed both ways
     if k == 'amp_in':
