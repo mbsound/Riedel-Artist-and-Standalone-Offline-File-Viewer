@@ -1434,10 +1434,11 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
 # Headset-mode patches mute #0 (confirmed 2026-09-26: muting the speaker / unmuting the headset in port 1.1's Speaker patch).
 AUDIOPATCH_AMP_OUT_NAMES = {0: 'Speaker', 2: 'Headset'}
 # Looks like a 6 x 6 grid, index = input * 6 + output (inputs: 0 Panel Mic .. 4 Matrix Ch.1; outputs: 0 Speaker/Headset,
-# 1 External Out/Headset B, 2 Audio Out A, 3 Audio Out B, 4 Matrix Ch.1 (A)). Speaker and headset share output 0.
+# 1 External Out/Headset B, 2 Audio Out A, 3 Audio Out B, 4 Matrix Ch.1 (A), 5 Matrix Ch.2). Speaker and headset share output 0.
 AUDIOPATCH_CROSSPOINT_NAMES = {4: 'Panel Mic -> Matrix Channel 1 (A)', 24: 'Matrix Channel 1 -> Speaker/Headset Out',
                                25: 'Matrix Channel 1 -> External Out/Headset B', 26: 'Matrix Channel 1 -> Audio Out A',
-                               27: 'Matrix Channel 1 -> Audio Out B', 28: 'Matrix Channel 1 -> Matrix Channel 1 (A)'}
+                               27: 'Matrix Channel 1 -> Audio Out B', 28: 'Matrix Channel 1 -> Matrix Channel 1 (A)',
+                               29: 'Matrix Channel 1 -> Matrix Channel 2'}   # output 5 needs the 2nd audio channel
 
 
 def read_audiopatch(ar, o):
