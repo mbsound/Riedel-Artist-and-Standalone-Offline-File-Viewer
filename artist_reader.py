@@ -1051,6 +1051,8 @@ def read_port(ar, o, pool_state=0):
         # Room code mode (confirmed 2026-09-25): bit 8 = speaker mode, bit 9 = headset mode, neither = none.
         # 4-wires have no mode option in Director but are saved with bit 8 set.
         o['room_mode'] = 'Headset' if flags & 0x200 else 'Speaker' if flags & 0x100 else ''
+        # Bit 12 = 2nd audio channel (confirmed 2026-09-26: enabling it on port 1.1 set the bit and removed port 1.2).
+        o['second_audio_channel'] = bool(flags & 0x1000)
     o['key_brightness'], o['led_brightness'] = ar.u8(), ar.u8()
     if v > 0x25:
         ar.u8()
