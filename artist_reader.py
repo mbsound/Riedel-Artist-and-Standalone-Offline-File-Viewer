@@ -1459,7 +1459,9 @@ LIMCOMP_FIELDS = [('Limiter Attack', _ATTACK), ('Limiter Release', _RELEASE),
                   ('Compressor Ratio', ['1:1', '1.25:1', '1.6:1', '2.5:1', '4:1', '8:1']),
                   ('Compressor Threshold', ['%d dB' % v for v in range(12, -51, -3)])]
 # Element names (index in the 67-element chain). Confirmed on port 1.1: 36, 37, 39, 40, 43, 44, 47, 48.
-AUDIOPATCH_ELEMENT_NAMES = {36: 'External Mic preamp', 37: 'Headset A preamp',
+# The two preamps are shared pairs (Director: 'Panel Mic / External Mic', 'Headset A / B'); confirmed via
+# External Mic -> #36 and Headset A / Headset B -> #37.
+AUDIOPATCH_ELEMENT_NAMES = {36: 'Panel Mic / External Mic preamp', 37: 'Headset A / B preamp',
                             39: 'Panel Mic/Headset A amp', 40: 'External Mic/Headset B amp',
                             43: 'Panel Mic/Headset A bandpass', 44: 'External Mic/Headset B bandpass',
                             47: 'Panel Mic/Headset A limiter/compressor',
