@@ -1287,7 +1287,9 @@ def read_gpio_in(ar, o):
         o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
     elif v < 0x43:
         skip_counted(ar)
-    o['gpio_110'], o['gpio_120'] = ar.i32(), ar.i32()
+    # +0x110 confirmed 2026-09-25: 1 = Inverted, 0 = Normal. +0x120 = 0-based index on the card.
+    inv, o['gpio_index'] = ar.i32(), ar.i32()
+    o['inverted'] = bool(inv)
     o['users'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
     read_gpio_source(ar, o)
 
@@ -1299,7 +1301,9 @@ def read_gpio_out(ar, o):
         o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
     elif v < 0x43:
         skip_counted(ar)
-    o['gpio_110'], o['gpio_120'] = ar.i32(), ar.i32()
+    # +0x110 confirmed 2026-09-25: 1 = Normally Closed, 0 = Normally Open. +0x120 = 0-based index on the card.
+    nc, o['gpio_index'] = ar.i32(), ar.i32()
+    o['normally_closed'] = bool(nc)
     o['gpio_128'] = ar.u8() if v < 0x550 else ar.u32()
     o['users'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
     if v < 0x2b:
