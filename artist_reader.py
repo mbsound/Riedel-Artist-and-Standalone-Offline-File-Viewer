@@ -638,6 +638,11 @@ KEY_MODE_INTERNAL = {0: 1, 1: 2, 2: 3, 3: 0}
 KEY_MODE_NAMES = {0: 'Auto', 1: 'Momentary', 2: 'Latching'}
 
 
+# LatchingTimeOut (+0x119): FUN_00c23380 + table 0xfee860; 0 = Net Default (key dialog FUN_00b12360).
+LATCHING_TIMEOUTS = ['Net Default', 'Permanent', '1 sec', '2 sec', '3 sec', '4 sec', '5 sec', '10 sec', '30 sec',
+                     '60 sec', '2 min', '5 min', '10 min', '30 min', '1 hour', '8 hours', '16 hours', '24 hours']
+
+
 def read_key(ar, o):
     """CPhysKey (0x09) FUN_00c7b160 (+ key base FUN_00c21050)."""
     v = ar.version
@@ -645,17 +650,18 @@ def read_key(ar, o):
     o['label'] = ar._take(8).decode('cp1252', 'replace').rstrip('\0') if v < 0x43 else ar.string()
     if v < 0x25:
         ar.u32()
-        o['key_b114'] = ar.u32()
+        o['auto_label'] = ar.u32()
         old = ar.u8()
         o['mode_internal'] = {0: 1, 1: 2, 2: 3}.get(old, 0)
         w1 = 0
     else:
         w1 = ar.u16()
         o['flags1'] = w1
-        o['key_b114'] = (w1 >> 1) & 1
-        o['key_b143'] = (w1 >> 2) & 1
-        o['key_b142'] = (w1 >> 3) & 3
-        o['key_b120'] = (w1 >> 5) & 1
+        # Names from Director's key property setters (FUN_00c215c0 / FUN_00c7946d): member offset in brackets.
+        o['auto_label'] = (w1 >> 1) & 1                 # +0x114 AutoLabelFlag
+        o['restore_volume_level'] = (w1 >> 2) & 1       # +0x143 RestoreVolumeLevel
+        o['action_by_key_pressed'] = (w1 >> 3) & 3      # +0x142 ActionByKeyPressed
+        o['dim'] = (w1 >> 5) & 1                        # +0x120 Dim
         o['mode_internal'] = KEY_MODE_INTERNAL[(w1 >> 6) & 3]
         o['mode'] = KEY_MODE_NAMES.get((w1 >> 6) & 3, 'unknown (%d)' % ((w1 >> 6) & 3))
     w2 = 0
@@ -664,33 +670,33 @@ def read_key(ar, o):
         o['flags2'] = w2
         o['key_b138'] = w2 & 1
         if v >= 0x350:
-            o['key_b140'] = (w2 >> 1) & 1
+            o['use_scroll_list_key_mode'] = (w2 >> 1) & 1   # +0x140 UseScrollListEntryKeyMode
         if v >= 0x560:
             o['key_b132'] = (w2 >> 8) & 1
     o['key_b141'] = (w2 >> 2) if v >= 0x430 else None
-    o['key_u8'] = ar.u8()                                  # +0x118
+    o['radio_button'] = ar.u8()                            # +0x118 RadioButton group (0 = none)
     if v < 0x25:
         ar.u8()
         o['commands'] = u32_list(ar)
     else:
         o['commands'] = [ar.u32() for _ in range(ar.u16())]   # CPhysCommand ids on this key
-        o['key_b129'] = (w1 >> 13) & 1
+        o['restart_latching_timer'] = (w1 >> 13) & 1   # +0x129 RestartLatchingTimer
     o['holder'] = ar.u32()                                 # CPhysKeyHolder (panel / expansion) id
     sel = (w1 >> 8) & 3 if v >= 0x2c else 0
-    o['key_b119'] = ar.u8() if sel == 2 else sel
+    o['latching_timeout'] = ar.u8() if sel == 2 else sel   # +0x119 LatchingTimeOut, see LATCHING_TIMEOUTS
     if v >= 0x3d and (w1 >> 10) & 1:
         if ar.u8() != 0xff:
             raise ArtFormatError('key colour marker at 0x%x' % (ar.p - 1))
-        o['colour'] = ar._take(3).hex()
-    o['key_b126'] = ar.u16() if v >= 0x3e and (w1 & 0x800) else 1
+        o['text_colour'] = ar._take(3).hex()          # +0x122 TextColor
+    o['icon'] = ar.u16() if v >= 0x3e and (w1 & 0x800) else 1     # +0x126 Icon: 1 = none
     if v >= 0x3e:
-        o['key_b128'] = (w1 >> 12) & 1
+        o['clip_label_6'] = (w1 >> 12) & 1              # +0x128 ClipLabelTo6Chars
     if v >= 0x1e0:
-        o['long_name'] = ar.string()
+        o['subtitle'] = ar.string()                     # Subtitle
         n = ar.i16()
-        o['key_i16'] = 16 if n == -1 else n
-        o['key_b131'] = (w1 >> 15) & 1
-        o['key_b130'] = (w1 >> 14) & 1
+        o['group_colour'] = 16 if n == -1 else n        # +0x134 GroupColor
+        o['show_subtitle'] = (w1 >> 15) & 1             # +0x131 ShowSubtitle
+        o['auto_subtitle'] = (w1 >> 14) & 1             # +0x130 AutoSubtitle
 
 
 # ----- network / frames ---------------------------------------------------------------------
