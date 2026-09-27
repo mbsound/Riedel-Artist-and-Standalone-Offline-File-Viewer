@@ -50,7 +50,7 @@ Pitfalls:
 
 ## 4. What is decoded (see the reader: every named field and helper cites its source)
 
-- **Frames and cards.** `NODE_TYPE_NAMES`. Performer and Artist card, CPU and PSU names are in `card_model()`. Node-Bay text is `port_node_bay()`. Controllers are [Bay A, Bay B]. `node_geom` is the node's box on the network drawing. `node_address` (+0x500, Property 2 'NodeAddress'), `node_id` (+0x88 = 0x100 + node_address), `soa` (+0x4fc, Property 3 'Soa' - Start of Allocation ring port offset), and `noa` (+0x4fe, Property 4 'Noa' - Number of Allocations frame port count).
+- **Frames and cards.** `NODE_TYPE_NAMES`. Performer and Artist card, CPU and PSU names are in `card_model()`. Card generation variants (-108, -208, G2, -008, SIC) are decoded from `FUN_00ccbb20` based on frame chassis `node['node_type']` (+0x4f8). Node-Bay text is `port_node_bay()`. Controllers are [Bay A, Bay B]. `node_geom` is the node's box on the network drawing. `node_address` (+0x500, Property 2 'NodeAddress'), `node_id` (+0x88 = 0x100 + node_address), `soa` (+0x4fc, Property 3 'Soa' - Start of Allocation ring port offset), and `noa` (+0x4fe, Property 4 'Noa' - Number of Allocations frame port count).
 - **Ports.**
   - Port Type: `port_type()`.
   - Gains: stored as (byte−36)/2 dB.
@@ -61,10 +61,12 @@ Pitfalls:
   - Panel settings (Port Defaults 1/2): `panel_settings()`.
   - Port index, keypad shortcut (`port_338`, to spot-check), and limit-incoming-to-phone-book.
   - Stream blocks (AES67, Dante, Bolero, SIP): named fields such as `packet_time` in µs, `payload_type`, `ssrc`, `multicast`, `bolero_user_id` and `multicast_port_to_bolero`.
+  - VoIP SIP block (`port_d0c2c0`): `local_sip_id` (+0x08, `s1`), `remote_host` (+0x04, `s2`), `remote_sip_id` (+0x0c, `s3`), and `audio_codec` (FUN_00cb9dc0 & FUN_00d0c2c0).
   - VoIP codecs and times: `VOIP_CODECS`, `VOIP_PACKET_MS`, `VOIP_RX_BUFFER_MS`.
   - Telephone codec phone numbers, SIP phone account fields, and expansion panels (names and address = stored id − 1).
   - Checked against Director's own Ports grid CSV: `tools/check_ports_csv.py` with `docs/director_exports/*.csv`, 160/160 ports.
 - **Keys.** All 18 properties: mode, latching timeout (`LATCHING_TIMEOUTS`), auto label, dim, radio button, text colour, icon, clip label, restart timer, subtitle and auto/show subtitle, group colour, scroll-list mode, action when muted (`MUTED_KEY_ACTIONS`), restore volume, signalization auto, monitoring state and scroll list.
+- **Colour Palette.** Decoded 16-step palette table at `0xfeb6e0` (`SWATCH_COLORS`, `swatch_color_name`): 0 Orange (#FFB366), 1 Yellow (#FFFF73), 2 Yellow-Green (#D0FF73), 3 Light Green (#A2FF73), 4 Green (#73FF73), 5 Mint (#80FFAA), 6 Cyan-Green (#73FFD0), 7 Cyan (#73FFFF), 8 Light Blue (#80AAFF), 9 Blue (#7373FF), 10 Indigo (#B38CFF), 11 Violet (#D073FF), 12 Magenta (#FF73E8), 13 Rose (#FF66B3), 14 Red (#FF6666), 15 Light Grey (#D7D7D7), 16 None.
 - **Commands.**
   - Priority (`PRIORITY_NAMES`: 0 Low, 1 Standard, 2 High) is the first byte.
   - Monitoring (`MONITORING_NAMES`) is `talk_b4` and `ifb_mode`.
@@ -75,8 +77,8 @@ Pitfalls:
   - Mode 0 = Speaker, 1 = Headset.
   - Every DSP element is named: `AUDIOPATCH_ELEMENT_NAMES`, `audiopatch_element_text()`, `audiopatch_routes()`.
   - Option lists: `BANDPASS_HP`/`LP` (bytes stored LP first), `LIMCOMP_FIELDS` (byte order: limiter attack, release, threshold, output level, then compressor attack, release, ratio, threshold), `AMP_OUT_GAINS`, amp in = 0.5 dB steps.
-- **Groups and conferences.** Keypad shortcut, icon, colour, trunk-enabled, DynaConf, and the MCR flag. Member words are port numbers.
-- **IFB.** Dim scale, label, long name, endpoints, `is_trunk_enabled` (+0x12, bit 1), `ifb_flag_a` (+0x11, bit 0). Containers have `container_version` (+0x84, constant 2) and `container_index` (+0x88, 0-indexed for "IFB-Container %u of 10").
+- **Groups and conferences.** Keypad shortcut, icon, colour (`SWATCH_COLORS`), trunk-enabled, DynaConf, and the MCR flag. Member words are port numbers.
+- **IFB.** Dim scale, label, long name, endpoints, `is_trunk_enabled` (+0x12, bit 1), `ifb_flag_a` (+0x11, bit 0 internal engine flag). Containers have `container_version` (+0x84, constant 2) and `container_index` (+0x88, 0-indexed for "IFB-Container %u of 10").
 - **GPIO.** Inverted and normally closed flags, GPIO index, `channel_selection` (+0x11c, property index 5), and `off_delay` (+0x128, OffDelay in ms up to 10000ms).
 - **Users and permissions.** `user_manager` (+0xa0), `USER_RIGHT_BITS` with 16 decoded permission flags (from CUserPP DIALOG 184 and FUN_00ccd0e0), and object base trailer rights mask (1=Edit, 2=Create children, 4=Delete children).
 - **Logic.** `from_pin` and `to_pin` (output/input pin indices on CPhysLogicLine), `active_inputs` and `not_active_inputs` (triggering Active vs Not Active on CPhysLogicDst), and float coordinates for `rect`.
@@ -89,7 +91,7 @@ Pitfalls:
   - `net_port_settings()`: Port Settings page, including dim prios, character set, colours, key banks, Bolero multicast range, and the Live View password and panel PIN.
   - `net_monitor_defaults()`: Dialog 703 Monitor Defaults (`monitor_keystate`, `monitor_call_to_port`, `monitor_call_to_ifb`).
   - `net_voip_defaults()`.
-  - `net_general()`: system name, IFB titles, net number, default trunking addresses, AES67 Defaults, function colours (`FUNCTION_COLOR_ORDER`), and `define_colors_automatically` (Dialog 729).
+  - `net_general()`: system name, IFB titles, net number, default trunking addresses, AES67 Defaults, function colours (`FUNCTION_COLOR_ORDER`, decoded via `SWATCH_COLORS`), and `define_colors_automatically` (Dialog 729).
   - `net_markers()` with `marker_display()`: 123 key markers from `MARKER_NAMES`, with priority, persistence timeout and 1000/2000/RIF display colours.
   - `net_list_a` = nodes, `net_list_b` = fibre links, `net_i32` = network-drawing floats.
 - **Excel Exporter (`Code/art_to_excel.py`).**
@@ -109,17 +111,55 @@ Pitfalls:
     13. `Users & Access`: All operator & administrator accounts with username, full name, role, rights mask, decoded permissions, and courtesy lock PIN/password.
     14. `Scheduler`: Automated scheduler tasks with SYSTEMTIME calendar recurrence, times, and linked matrix events.
 
-## 5. Still to do (roughly by value)
+## 5. Parallel Work Division on Artist (Multi-Agent Protocol)
 
-1. **Artist card variants.** Tell apart -108, -208 and G2 on Artist frames.
-2. **Colour index → name.** Director draws colours as swatches, with no names in the exe, so colours are left as numbers (16 = none).
-3. **`.bol` files.** Separate work: see the memory note on the Bolero firmware packages.
+To maximize throughput and prevent file conflicts, work on Artist is strictly partitioned into two decoupled tracks:
 
-## 6. Spot-check list (one batched test save in Director should settle these)
+### TRACK A: Claude's Assigned Duties (Core Reverse Engineering & Reader Decodes)
+**Scope:** `artist_reader.py`, `Reference binaries/Director 8.9.D2.exe`, Ghidra (`%LOCALAPPDATA%\ghidra_projects\Director89`), `tools/dre.py`, `docs/HANDOFF.md`.
+**Deliverables:**
+1. **Solve Remaining Spot-Checks in Director Binary:**
+   - **SIP phone connection flag bit 0 (`+0x3a8`):** Trace Dialog 639 / Dialog 676 or setter in `Reference binaries/Director 8.9.D2.exe` to find the exact UI checkbox name.
+   - **Key "Monitoring state on key" options:** Identify the string values for the 2 combo box choices in Dialog 205 (Key Details).
+   - **System Key Defaults "Key Mode" (`net_bytes['4be']` = 1):** Verify the exact enum string in Dialog 207.
+   - **Port Keypad Shortcut (`port_338`):** Verify control ID and setter in the Ports configuration dialog.
+   - **System Default "Copy Reply" flag:** Confirm whether Artist CRAZY's `True` value reflects the Dialog 208 checkbox.
+2. **Decode Any Remaining Unmapped Flags:**
+   - Ensure all property setters and record trailers are decoded 1:1.
+   - Maintain 100% backward-compatibility aliases on all records.
+3. **Regression Gate:**
+   - Run the regression test after every modification:
+     `python -c "import glob, artist_reader as A; [print(f, len(A.parse_art(open(f, 'rb').read())[1])) for f in glob.glob('../**/*.Art', recursive=True)]"`
+   - Expected counts: `6112`, `6422`, `1749`, `1345`, `6727`.
+4. **Git Protocol:**
+   - Commit author MUST be: `-c user.name="Claude" -c user.email="matt@mbsound.org"`.
+   - Never run `git add -A` (protect `tools/node_modules/`).
+   - Only commit `artist_reader.py` and documentation files.
 
-- On a VoIP port (the SIP block in `port_d0c2c0`), which of `s1`/`s3` is RemoteSipId and which is LocalSipId. `s2` = RemoteHost is confirmed.
-- System Key Defaults "Key Mode" (`net_bytes['4be']` = 1): read as Auto.
-- Port Keypad Shortcut = `port_338` (65535 = none).
-- Key "Monitoring state on key" (`monitoring_state`, 2 options): names unknown, because Director fills them at runtime.
-- SIP phone connection flag bit 0 (`+0x3a8`): which checkbox it is.
-- The Artist CRAZY system default "Copy Reply" reads True, while the other files read False. Confirm.
+### TRACK B: Antigravity's Assigned Duties (Excel Reporting Engine & Presentation)
+**Scope:** `Code/art_to_excel.py`, `Code/export_tool.py`.
+**Deliverables:**
+1. **Swatch Color Integration:**
+   - Add "Group Color" and "Text Color" columns to Sheet 6 (`Panels & Keys`) using `swatch_color_name` (displaying both color name and hex code).
+   - Add "Color" column to Sheet 7 (`Conferences`) and Sheet 8 (`Groups`).
+   - Add Dialog 729 Function Colors and Monitor Defaults to Sheet 2 (`System Settings`).
+2. **VoIP SIP Accounts on Grid:**
+   - Display `local_sip_id`, `remote_host`, `remote_sip_id` on Sheet 5 (`Ports`) and Sheet 12 (`IP Trunks`).
+3. **Visual Styling & Formatting:**
+   - Polish headers, column widths, freeze panes, number formats (e.g. dB gains, IP addresses, port numbers).
+4. **Unified CLI Runner (`Code/export_tool.py`):**
+   - Provide a single command-line interface to batch export `.Art` (and `.bol`) files to Excel and JSON with verification logs.
+
+---
+
+## 6. Spot-check list (Status & Findings)
+
+- [x] **VoIP Port SIP Block (`port_d0c2c0`):** CONFIRMED. `s1` (+0x08) = `local_sip_id`, `s2` (+0x04) = `remote_host`, `s3` (+0x0c) = `remote_sip_id`.
+- [x] **Artist Card Variants:** CONFIRMED. `FUN_00ccbb20` computes card variants (-108, -208, G2, -008, SIC) based on chassis `node['node_type']`.
+- [x] **Swatch Color Palette:** CONFIRMED. Table `0xfeb6e0` contains 16 COLORREF swatches (0..15 + 16 None).
+- [x] **IFB Flags (+0x11 / +0x12):** CONFIRMED. `f & 1` (+0x11) = internal engine flag, `(f >> 1) & 1` (+0x12) = `is_trunk_enabled`.
+- [ ] **System Key Defaults "Key Mode" (`net_bytes['4be']` = 1):** Read as Auto; verify against Dialog 207 combo options.
+- [ ] **Port Keypad Shortcut = `port_338` (65535 = none):** Verify control ID in Dialog 211 / Ports grid.
+- [ ] **Key "Monitoring state on key" (`monitoring_state`, 2 options):** Names in Dialog 205 (Key Details).
+- [ ] **SIP phone connection flag bit 0 (`+0x3a8`):** Which checkbox in Dialog 639 / 676.
+- [ ] **System Default "Copy Reply":** Confirm Dialog 208 checkbox mapping for `net_bytes['...']`.
