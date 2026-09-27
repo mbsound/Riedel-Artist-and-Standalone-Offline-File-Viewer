@@ -433,6 +433,16 @@ def skip_counted(ar):
     ar.skip(ar.str_len())
 
 
+# Command audio priority (+0x98 etc.) and TrunkcallPriority (+0x8c): Director's list Low / Standard / High.
+PRIORITY_NAMES = {0: 'Low', 1: 'Standard', 2: 'High'}
+# Monitoring (Talk +0xb4, Call to IFB): name function FUN_006d1c40.
+MONITORING_NAMES = ['switchable', 'always on', 'always off']
+# Call-to-Port flag word bits (save code FUN_00c543d0; property setter FUN_00c51640).
+TALK_FLAG_BITS = {0: 'isolate', 1: 'isolate_self', 2: 'autolisten_from_dest', 3: 'beep_dest_on_call',
+                  4: 'allow_set_in_out_gain', 5: 'duplex_call', 8: 'allow_telephone_call',
+                  9: 'allow_fixed_number', 10: 'allow_phonebook', 11: 'talk_flag_c1'}
+
+
 def read_cmd_head(ar, o, key='cmd_u8'):
     """The u8 + u16 every command starts with (u32 + u32 before 0x25). Returns the u16."""
     if ar.version < 0x25:
@@ -456,7 +466,8 @@ def read_cmd_base(ar, o):
     if v > 0x24:
         f = ar.u8()
         o['cmd_flags'] = f
-        o['cmd_mode'] = (f >> 1) & 7      # +0x8c
+        o['cmd_mode'] = (f >> 1) & 7      # +0x8c TrunkcallPriority (setter FUN_00c57d30)
+        o['trunkcall_priority'] = PRIORITY_NAMES.get(o['cmd_mode'], 'value %d' % o['cmd_mode'])
         o['cmd_trunk_flag'] = f & 1       # vtable+0xec at save time
         if v > 0x39:
             o['cmd_bit4'] = (f >> 4) & 1  # +0x94
@@ -472,14 +483,20 @@ def read_cmd_talk(ar, o):
     """CPhysCmdTalk (0x13, "Call to Port") FUN_00c543d0."""
     v = ar.version
     w = read_cmd_head(ar, o)
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])   # +0x98 Priority
     trunk = (w >> 5) & 1                  # vtable+0xec = byte +0xb8 bit 5
     o['trunk'] = bool(trunk)
+    o['disable_crosspoint_volume'] = bool(w & 4)                                 # +0xb8 bit 2
     f = ar.u32()
     o['talk_flags'] = f
+    # Bits per the save code FUN_00c543d0 and property setter FUN_00c51640.
+    for bit, name in TALK_FLAG_BITS.items():
+        o[name] = bool(f & (1 << bit))
     if v >= 0x28:
         o['talk_mode'] = f & 0x27
         if v >= 0x2f0:
             o['talk_b4'] = 0 if f & 0x40 else (1 if f & 0x80 else 2)
+            o['monitoring'] = MONITORING_NAMES[o['talk_b4']]            # +0xb4 Monitoring
     if v >= 0x500:
         o['talk_ext'] = {'b8': (f >> 8) & 1, 'b9': (f >> 9) & 1, 'b10': (f >> 10) & 1, 'b11': (f >> 11) & 1}
     if v < 0x480:
@@ -495,6 +512,7 @@ def read_cmd_talk(ar, o):
         o['trunk_name'] = ar.string()
     if v >= 0x500:
         o['talk_str'] = ar.string()
+        o['fixed_number'] = o['talk_str']                        # +0xbc FixedNumber
     read_cmd_base(ar, o)
 
 
@@ -502,8 +520,11 @@ def read_cmd_listen(ar, o):
     """CPhysCmdListen (0x14) FUN_00c45650."""
     v = ar.version
     w = read_cmd_head(ar, o)
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])   # +0xa8 Priority
     trunk = (w >> 4) & 1                  # vtable+0xec = byte +0x98 bit 4
     o['trunk'] = bool(trunk)
+    o['disable_crosspoint_volume'] = bool(w & 4)                                 # setter FUN_00c467b0
+    o['allow_set_in_out_gain'] = bool(w & 8)                                     # setter FUN_00c46750
     if v < 0x480:
         o['listen_old'] = ar._take(3).hex()
     if v < 0x480 or not trunk:
@@ -542,13 +563,18 @@ def read_cmd_conf(ar, o):
     """CPhysCmdConf (0x16, "Call to Conference") FUN_00c33340."""
     v = ar.version
     read_cmd_head(ar, o)
-    o['conf_u8a'] = ar.u8()               # +0x99
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])   # +0x98 AudioPriority
+    o['conf_u8a'] = ar.u8()               # +0x99 AllowSelectingConf
+    o['allow_selecting_conf'] = bool(o['conf_u8a'])
     if v >= 0x11:
         o['conf_u8b'] = ar.u8()           # +0x9c
+        o['use_second_channel'] = bool(o['conf_u8b'] & 2)
     o['conference'] = ar.u32()            # CPhysConf id
     o['key'] = ar.u32()
     if v >= 0x14:
-        o['conf_u8c'] = ar.u8()           # +0x9b
+        o['conf_u8c'] = ar.u8()           # +0x9b: bit 5 Talk, bit 6 Listen, bit 7 AllowChangingDestConf
+        c = o['conf_u8c']
+        o['talk'], o['listen'], o['allow_changing_dest_conf'] = bool(c & 0x20), bool(c & 0x40), bool(c & 0x80)
     if 0x29 <= v <= 0x2a:
         ar.u32(); ar.u32(); skip_counted(ar)
     read_cmd_base(ar, o)
@@ -612,20 +638,24 @@ def read_cmd_call_ifb(ar, o):
     """CPhysCmdCallToIFB (0x67) FUN_00c2d410."""
     v = ar.version
     o['cmd_u8'] = ar.u8()
+    # Priority: the one High Call-to-IFB in Artist CRAZY stores 2, every other command 1 (confirmed).
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])
     w = ar.u16()
     o['cmd_word'] = w
     trunk = (w >> 5) & 1                  # vtable+0xec = byte +0xa8 bit 5
     o['trunk'] = bool(trunk)
+    # +0xa8 bits (setters FUN_00c2e5d0 / e570 / e510): 1 UseSecondChannel, 2 DisableCrosspointVolume, 3 BeepDestOnCall
+    o['use_second_channel'], o['disable_crosspoint_volume'], o['beep_dest_on_call'] =         bool(w & 2), bool(w & 4), bool(w & 8)
     if v >= 0x2f0:
         b = ar.u8()
         o['ifb_mode'] = 0 if b & 1 else (1 if b & 2 else 2)
-        o['priority'] = {1: 'High'}.get(o['ifb_mode'], 'unconfirmed (%d)' % o['ifb_mode'])   # 1 = High confirmed
+        o['monitoring'] = MONITORING_NAMES[o['ifb_mode']]
     if v < 0x480 or not trunk:
         o['ifb'] = ar.u32()               # CPhysIFB id (0 / 0xffffffff = none)
     o['key'] = ar.u32()
     if v >= 0x38 and (v < 0x480 or trunk):
         o['trunk_a'] = ar.u32()
-        o['trunk_u16'] = ar.u16()
+        o['trunk_u16'] = ar.u16()                  # TrunkingIFBNumber
         o['trunk_name'] = ar.string()
     read_cmd_base(ar, o)
 
