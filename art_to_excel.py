@@ -530,12 +530,12 @@ def build_panels_keys_sheet(wb, h, recs, byid):
     sorted_keys = sorted(keys, key=lambda k: (k.get('holder', 0), k.get('slot', 0)))
 
     title_banner(ws, "Hardware SmartPanels, Beltpacks & Active Key Assignments",
-                 f"Total Active Configured Keys: {len(sorted_keys)}", max_col=14)
+                 f"Total Active Configured Keys: {len(sorted_keys)}", max_col=15)
 
     headers = [
         "Station / Panel Name", "Port #", "Station Model", "Key Slot", "Key Label",
         "Key Subtitle", "Group Color", "Text Color", "Key Mode", "Latching Timeout",
-        "Primary Function", "Target Destination", "Priority", "Stacked Secondary Function"
+        "Monitoring State", "Primary Function", "Target Destination", "Priority", "Stacked Secondary Function"
     ]
     header_row(ws, 4, headers, bg=C['teal'])
 
@@ -567,6 +567,7 @@ def build_panels_keys_sheet(wb, h, recs, byid):
 
         slot_num = k.get('slot', 0) + 1
         timeout_str = A.LATCHING_TIMEOUTS[k['latching_timeout']] if k.get('latching_timeout', 0) < len(A.LATCHING_TIMEOUTS) else str(k.get('latching_timeout', ''))
+        mon_state = k.get('monitoring_state_name') or '—'
         grp_c = A.swatch_color_name(k.get('group_colour'))
         txt_c = f"#{k['text_colour'].upper()}" if k.get('text_colour') else "Default"
         grp_fill, grp_fg = get_swatch_fill_fg(k.get('group_colour'))
@@ -585,10 +586,11 @@ def build_panels_keys_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 8, txt_c, bg=txt_fill or bg, fg=txt_fg if txt_fill else "000000", bold=bool(txt_fill), align="center")
         write_cell(ws, r_idx, 9, k.get('mode', 'Momentary'), bg=bg, align="center")
         write_cell(ws, r_idx, 10, timeout_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 11, fn1, bg=bg, bold=True)
-        write_cell(ws, r_idx, 12, target1, bg=bg)
-        write_cell(ws, r_idx, 13, prio1, bg=bg, align="center")
-        write_cell(ws, r_idx, 14, sec_str, bg=bg)
+        write_cell(ws, r_idx, 11, mon_state, bg=bg, align="center")
+        write_cell(ws, r_idx, 12, fn1, bg=bg, bold=True)
+        write_cell(ws, r_idx, 13, target1, bg=bg)
+        write_cell(ws, r_idx, 14, prio1, bg=bg, align="center")
+        write_cell(ws, r_idx, 15, sec_str, bg=bg)
 
     auto_width(ws)
 
