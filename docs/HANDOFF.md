@@ -89,7 +89,7 @@ Pitfalls:
   - `net_panel_defaults()`: system Port Defaults 1/2.
   - `net_call_key_defaults()`: Call Defaults and Key Defaults.
   - `net_port_settings()`: Port Settings page, including dim prios, character set, colours, key banks, Bolero multicast range, and the Live View password and panel PIN.
-  - `net_monitor_defaults()`: Dialog 703 Monitor Defaults (`monitor_keystate`, `monitor_call_to_port`, `monitor_call_to_ifb`).
+  - `net_monitor_defaults()`: Dialog 703 Monitor Defaults. **Corrected by Claude:** `+0x72c` = `monitor_call_to_ifb`, `+0x730` = `monitor_call_to_port` (both switchable / always on / always off), `+0x734` = `monitor_keystate` (initial off / initial on). Store FUN_00a2a820, init FUN_00a2a8f0; groups placed by template geometry. Key names unchanged, so the Excel sheet needs no change.
   - `net_voip_defaults()`.
   - `net_general()`: system name, IFB titles, net number, default trunking addresses, AES67 Defaults, function colours (`FUNCTION_COLOR_ORDER`, decoded via `SWATCH_COLORS`), and `define_colors_automatically` (Dialog 729).
   - `net_markers()` with `marker_display()`: 123 key markers from `MARKER_NAMES`, with priority, persistence timeout and 1000/2000/RIF display colours.

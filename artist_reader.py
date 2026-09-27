@@ -862,13 +862,15 @@ def read_net(ar, o):
         b['4b8'] = ar.u8()
     if v >= 0x2f0:
         o['net_72c'], o['net_730'], o['net_734'] = ar.u8(), ar.u8(), ar.u8()
-        # Dialog 703 Monitor Defaults (0=switchable, 1=always on, 2=always off)
-        o['monitor_keystate'] = MONITORING_NAMES[o['net_72c']] if o['net_72c'] < len(MONITORING_NAMES) else o['net_72c']
-        o['monitor_call_to_port'] = MONITORING_NAMES[o['net_730']] if o['net_730'] < len(MONITORING_NAMES) else o['net_730']
-        o['monitor_call_to_ifb'] = 'initial on' if o['net_734'] == 1 else 'initial off'
+        # Dialog 703 Monitor Defaults (store FUN_00a2a820, init FUN_00a2a8f0; groups placed by template geometry):
+        # +0x72c = 'Call to IFB' (combo 2032), +0x730 = 'Call to Port' (2033), both switchable/always on/always off;
+        # +0x734 = 'Keystate' (2034), list 'initial off' / 'initial on'.
+        o['monitor_call_to_ifb'] = _pick(MONITORING_NAMES, o['net_72c'])
+        o['monitor_call_to_port'] = _pick(MONITORING_NAMES, o['net_730'])
+        o['monitor_keystate'] = _pick(['initial off', 'initial on'], o['net_734'])
     elif v >= 0x210:
         o['net_72c'] = ar.u8()
-        o['monitor_keystate'] = MONITORING_NAMES[o['net_72c']] if o['net_72c'] < len(MONITORING_NAMES) else o['net_72c']
+        o['monitor_call_to_ifb'] = _pick(MONITORING_NAMES, o['net_72c'])
     if v > 0x2f:
         o['net_strings'] = [ar.string() for _ in range(4)]
     if v >= 0x3c:
