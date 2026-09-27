@@ -1322,6 +1322,38 @@ def net_call_key_defaults(net):
     }
 
 
+def net_port_settings(net):
+    """System 'Port Settings' page (dialog 209; init FUN_00b99980, store FUN_00b98fb0)."""
+    b = net['net_bytes']
+    dim = ['0 dB', '-6 dB', '-12 dB', '-18 dB', '-24 dB', '-36 dB', '-48 dB', 'mute']
+    g = lambda k, d=0: net.get(k, d)
+    ip = lambda v: '.'.join(str(x) for x in (v & 0xffffffff).to_bytes(4, 'big')) if v else ''
+    banks = net.get('net_named_codes') or []
+    out = {
+        'Dim lower Prios for "Standard"': _pick(dim, b['4bc']),
+        'Dim lower Prios for "High"': _pick(dim, b['4ba']),
+        'Dim lower Prios for "Paging"': _pick(dim, b['4bb']),
+        'Dim lower Prios for "Emergency"': _pick(dim, b['4b9']),
+        'Reply-Key Timeout': _pick(['0 s', '1 s', '3 s', '5 s', '10 s', '24 hours'], b['4bd']),
+        'Character set': {1252: 'ASCII', 932: 'JISCII (Katakana)', 1251: 'Cyrillic'}.get(g('net_718'), 'ASCII'),
+        'First keypress wakes up from screensaver AND runs key commands too': bool(b['4b8']),
+        'Panel operation mode': _pick(['Talk - Mute', 'Talk - Listen'], g('net_788')),
+        'Enable colors': bool(g('net_78b')),
+        'Show colors on': _pick(['Display', 'Key Ring'], g('net_78a')),
+        'Show volume bars': _pick(['dynamic', 'permanent'], g('net_78c')),
+        'Incoming Call Signalization': _pick(['blinking', 'permanent'], g('net_78d')),
+        'Audio Patch Settings: Headset A / B': _pick(['electret', 'dynamic (+20 dB)'], g('net_789')),
+        'Bolero Start Multicast IP Address': ip(g('net_798')),
+        'Bolero End Multicast IP Address': ip(g('net_79c')),
+        'Password for Live View & Remote Control': net.get('net_secret_a', ''),
+        'Panel menu PIN for Artist-1024 panels': net.get('net_secret_b', ''),
+    }
+    for i, (colour, name) in enumerate(banks[:2]):
+        out['Key Bank %d name' % (i + 1)] = name
+        out['Key Bank %d color' % (i + 1)] = colour
+    return out
+
+
 def room_code_label(code):
     """Stored room code -> Director's value: 0 = <not assigned>, 1-26 = A-Z, 27-254 = 1-228 (confirmed)."""
     if not code:
