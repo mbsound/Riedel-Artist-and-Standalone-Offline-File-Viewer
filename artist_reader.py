@@ -978,6 +978,11 @@ def read_port_c0d420(ar):
         s['u8a'] = ar.u8()
     if v >= 0x1d0:
         s['u8b'] = ar.u8()
+    # Names from the port property getter FUN_00cb9dc0 (Director's automation interface).
+    s['ip_address'], s['listen_port'] = s['streams'][0][0], s['streams'][0][1]
+    if len(s['streams']) > 1:
+        s['ip_address_2'], s['listen_port_2'] = s['streams'][1][0], s['streams'][1][1]
+    s['packet_time'], s['receive_buffer'], s['play_mode'] = s['u16a'], s.get('u16b'), s.get('u8b')
     return s
 
 
@@ -1004,6 +1009,19 @@ def read_port_stream(ar, with_u16b):
         s['u32c'] = ar.u32()
     if v >= 0x370:
         s['bytes16'] = ar._take(16).hex()
+    # Names from FUN_00cb9dc0 (stream block offsets in brackets).
+    s['packet_time'], s['payload_type'], s['bit_depth'] = s['u16'], s['u8a'], s['u8b']   # +0xe +0xc +0xd
+    s['ssrc'], s['timestamp_offset'] = s['u32a'], s['u32b']                           # +0x10 +0x14
+    s['protocol'], s['channels'], s['selection'] = s['u8c'], s['u8d'], s['u8e']       # +0x18 +0x19 +0x1a
+    if with_u16b:
+        s['receive_buffer'], s['play_mode'] = s.get('u16d'), s.get('u8f')             # +0x1c +0x24
+    if v >= 0x320:
+        for n, st in enumerate(s['streams']):
+            sfx = '' if n == 0 else '_2'
+            if with_u16b:        # receive: source IP, multicast IP, port, RTSP URI
+                s['source_ip' + sfx], s['multicast' + sfx], s['multicast_port' + sfx], s['rtsp_uri' + sfx] = st
+            else:                # send: multicast IP, port, name
+                s['multicast' + sfx], s['multicast_port' + sfx] = st[0], st[1]
     return s
 
 
@@ -1114,6 +1132,12 @@ def read_port(ar, o, pool_state=0):
                  'b': ar._take(4).hex()}
             if v >= 0x40:
                 s['s4'] = ar.string()
+            # SIP / VoIP settings (FUN_00d0c2c0; names from getter FUN_00cb9dc0). s2 is RemoteHost (an IP in
+            # the samples); s1 / s3 are RemoteSipId / LocalSipId, order not yet confirmed.
+            bb = bytes.fromhex(s['b'])
+            s['remote_host'], s['audio_codec'] = s['s2'], s['u32']
+            s['receive_buffer_size'], s['audio_packet_size'] = bb[0], bb[1]
+            s['voice_act_detection'], s['dscp'] = bb[2] == 1, bb[3]
             o['port_d0c2c0'] = s
         sub = 0
         if v > 0x45:
@@ -1137,9 +1161,13 @@ def read_port(ar, o, pool_state=0):
                     s['u16c'] = ar.u16()
                 if s.get('u32') is not None:
                     s['ip'] = '.'.join(str(x) for x in s['u32'].to_bytes(4, 'big'))
+                # Bolero block (port +0x224; defaults +8 = 5004, +0xa = 42000; getter FUN_00cb9dc0):
+                s['multicast'], s['multicast_port'] = s.get('ip'), s.get('u16a')
+                s['bolero_user_id'], s['multicast_port_to_bolero'] = s.get('u16b'), s.get('u16c')
                 o['output_media_2'] = s      # confirmed: Bolero multicast IP (u32) + RTP port (u16a)
         if v > 0x2ef and ar.u8() & 1:
             o['port_c10a80'] = (ar.u16(), ar.u16())
+            o['input_channel'], o['output_channel'] = o['port_c10a80']        # port +0x228 block
         o['port_str'] = ar.string()
     if v > 0x30:
         o['port_398'] = list(ar._take(ar.u8()))
