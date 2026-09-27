@@ -164,3 +164,19 @@ To maximize throughput and prevent file conflicts, work on Artist is strictly pa
 - [x] **Key "Monitoring state on key"** (`monitoring_state` / `monitoring_state_name`): 0 = "initial off", 1 = "initial on" (list built at `0x6d1dd7` into `0x12fe24c`).
 - [x] **SIP phone connection flag bit 0 (`+0x3a8`):** the "SIP transport protocol" **UDP** radio (control `0x732`; TCP is `0x731`) → `sip_transport`.
 - [x] **System Default "Copy Reply":** `+0x4b7` <- dialog 206 checkbox 1879 "Enable Copy Reply" (FUN_00b97dd0). Only stored from schema `0x560` (8.9), so 8.6 files have no value (read as False); CRAZY's True is real.
+
+## 7. Track A: still unnamed (after Claude's 2026-09-27 pass)
+
+These fields have no named alias yet. Everything else carries a Director name.
+- **Node:** `node_8c`, `node_90`, `node_a0`, `node_a4`, `node_a8` (bit mask `0x2d7fffff` on every node).
+- **GPIO:** `gpio_u8` (in and out), `gpio_128` (out).
+- **User:** `user_u16`.
+- **VoIP card:** `voip_u32` (the u32 after gateway).
+- **SIC AES67:** `aes67_16`, `aes67_bytes`, `aes67_u8`, `aes67_list_a/b`. Panel AES67: `aes67_bytes`, `aes67_u8`.
+- **System:** `net_colour` (3 bytes after the 0xff marker), `net_i32` (network-drawing floats, low value).
+- **Commands:** `cmd_ref` / `cmd_bit4` on the command base.
+
+Suggested method:
+- Find the object's dialog in `docs/director_ddx.txt`.
+- Its OK handler maps `obj+OFF` to the control. To locate it, byte-scan for the disp32 write, like the Monitor Defaults fix.
+- Place controls by template geometry, not by the DDX label guess.
