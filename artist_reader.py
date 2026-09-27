@@ -2120,6 +2120,67 @@ def read_phone_book(ar, o):
     o['name'] = ar.string()
 
 
+def read_zmxif(ar, o):
+    """CPhysZMXIF (0x48) FUN_00d03c80: ZMX interface configuration."""
+    v = ar.version
+    o['name'] = ar.wstring()
+    count1 = ar.u32()
+    entries1 = []
+    for _ in range(count1):
+        e = {
+            'i1': ar.i32(),
+            's1': ar.wstring(),
+            'i2': ar.i32(),
+            's2': ar.wstring(),
+            'i3': ar.i32(),
+        }
+        if v >= 0x16:
+            e['s3'] = ar.wstring()
+        e['conf'] = ar.u32()
+        e['panel'] = ar.u32()
+        if v == 0x1c:
+            e['s4'] = ar.wstring()
+        if v >= 0x1d:
+            e['i4'] = ar.i32()
+        entries1.append(e)
+    o['entries1'] = entries1
+
+    count2 = ar.i32()
+    entries2 = []
+    for _ in range(count2):
+        e = {
+            'u32_a': ar.u32(),
+            's': ar.wstring(),
+            'u32_b': ar.u32(),
+        }
+        subcount = ar.i32()
+        e['groups'] = [(ar.u8(), ar.u8(), ar.u8(), ar.u32()) for _ in range(subcount)]
+        entries2.append(e)
+    o['entries2'] = entries2
+
+    if v >= 0x1d:
+        count3 = ar.i32()
+        entries3 = []
+        for _ in range(count3):
+            e = {
+                'conf': ar.u32(),
+                'u8': ar.u8(),
+                'ints': [ar.i32() for _ in range(8)],
+                'panel': ar.u32(),
+                's': ar.wstring(),
+            }
+            entries3.append(e)
+        o['entries3'] = entries3
+
+    if v > 0x1a:
+        o['panels'] = [ar.u32() for _ in range(ar.i32())]
+        o['groups'] = [ar.u32() for _ in range(ar.i32())]
+        o['confs'] = [ar.u32() for _ in range(ar.i32())]
+
+    if v > 0x2f:
+        o['str_end'] = ar.string()
+
+
 def read_connect_voip_device(ar, o):
     """CPhysConnectVoipDevice (0x509) FUN_00a36df0 (untested: not in the sample files)."""
     ar.u8()
@@ -2306,6 +2367,7 @@ READERS = {
     0x423: read_group_conf_shortlist,
     0x066: read_ifb,
     0x01a: read_phone_book,
+    0x048: read_zmxif,
     0x41f: read_key,                # CPhysVirtualKey: same record as CPhysKey (FUN_00cd0150)
     0x509: read_connect_voip_device,
     0x50e: read_nsa_device, 0x50f: read_nsa_device, 0x510: read_nsa_device, 0x511: read_nsa_device,
