@@ -247,6 +247,8 @@ def build_system_settings_sheet(wb, h, recs, byid):
         ("Monitor Defaults", "Monitor Call to IFB", net_mon.get('Monitor Call to IFB'), "Call to IFB monitoring default (Dialog 703)"),
         # Color Defaults (Dialog 729)
         ("Color Defaults", "Define Colors Automatically", "Enabled" if net_gen.get('Define colors automatically') else "Disabled", "Dialog 729 CheckBox 1879"),
+        *[( "Color Defaults", f"Function Color: {fn_name}", net_gen.get(f"Function color: {fn_name}", "None"), "Dialog 729 Palette Assignment")
+          for fn_name in A.FUNCTION_COLOR_ORDER],
         # AES67 Defaults (Dialog 676)
         ("AES67 Defaults", "PTP Domain", net_gen.get('AES67: PTP Domain'), "IEEE 1588 PTP Domain number"),
         ("AES67 Defaults", "PTP Mode", net_gen.get('AES67: PTP Mode'), "PTP distribution mode (multicast / hybrid)"),
@@ -461,8 +463,18 @@ def build_ports_sheet(wb, h, recs, byid):
             if om2.get('bolero_user_id'):
                 stream_info.append(f"User: {om2['bolero_user_id']}")
         sip = p.get('port_d0c2c0')
-        if sip and sip.get('remote_host'):
-            stream_info.append(f"SIP Host: {sip['remote_host']} ({sip.get('audio_codec', '')})")
+        if sip:
+            sip_parts = []
+            if sip.get('remote_host'):
+                sip_parts.append(f"SIP Host: {sip['remote_host']}")
+            if sip.get('local_sip_id'):
+                sip_parts.append(f"Local: {sip['local_sip_id']}")
+            if sip.get('remote_sip_id'):
+                sip_parts.append(f"Remote: {sip['remote_sip_id']}")
+            if sip.get('audio_codec'):
+                sip_parts.append(f"Codec: {sip['audio_codec']}")
+            if sip_parts:
+                stream_info.append(' | '.join(sip_parts))
         if p.get('input_channel') is not None and p.get('output_channel') is not None:
             stream_info.append(f"NSA Ch: {p['input_channel']}/{p['output_channel']}")
         elif p.get('input_channel') is not None:
@@ -498,12 +510,12 @@ def build_panels_keys_sheet(wb, h, recs, byid):
     sorted_keys = sorted(keys, key=lambda k: (k.get('holder', 0), k.get('slot', 0)))
 
     title_banner(ws, "Hardware SmartPanels, Beltpacks & Active Key Assignments",
-                 f"Total Active Configured Keys: {len(sorted_keys)}", max_col=12)
+                 f"Total Active Configured Keys: {len(sorted_keys)}", max_col=14)
 
     headers = [
         "Station / Panel Name", "Port #", "Station Model", "Key Slot", "Key Label",
-        "Key Subtitle", "Key Mode", "Latching Timeout", "Primary Function", "Target Destination",
-        "Priority", "Stacked Secondary Function"
+        "Key Subtitle", "Group Color", "Text Color", "Key Mode", "Latching Timeout",
+        "Primary Function", "Target Destination", "Priority", "Stacked Secondary Function"
     ]
     header_row(ws, 4, headers, bg=C['teal'])
 
@@ -535,6 +547,8 @@ def build_panels_keys_sheet(wb, h, recs, byid):
 
         slot_num = k.get('slot', 0) + 1
         timeout_str = A.LATCHING_TIMEOUTS[k['latching_timeout']] if k.get('latching_timeout', 0) < len(A.LATCHING_TIMEOUTS) else str(k.get('latching_timeout', ''))
+        grp_c = A.swatch_color_name(k.get('group_colour'))
+        txt_c = f"#{k['text_colour'].upper()}" if k.get('text_colour') else "Default"
 
         write_cell(ws, r_idx, 1, panel_name, bg=bg, bold=True)
         write_cell(ws, r_idx, 2, port_num, bg=bg, align="center")
@@ -542,12 +556,14 @@ def build_panels_keys_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 4, f"Key {slot_num}", bg=bg, align="center", bold=True)
         write_cell(ws, r_idx, 5, k.get('label', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 6, k.get('subtitle', ''), bg=bg)
-        write_cell(ws, r_idx, 7, k.get('mode', 'Momentary'), bg=bg, align="center")
-        write_cell(ws, r_idx, 8, timeout_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 9, fn1, bg=bg, bold=True)
-        write_cell(ws, r_idx, 10, target1, bg=bg)
-        write_cell(ws, r_idx, 11, prio1, bg=bg, align="center")
-        write_cell(ws, r_idx, 12, sec_str, bg=bg)
+        write_cell(ws, r_idx, 7, grp_c, bg=bg, align="center")
+        write_cell(ws, r_idx, 8, txt_c, bg=bg, align="center")
+        write_cell(ws, r_idx, 9, k.get('mode', 'Momentary'), bg=bg, align="center")
+        write_cell(ws, r_idx, 10, timeout_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 11, fn1, bg=bg, bold=True)
+        write_cell(ws, r_idx, 12, target1, bg=bg)
+        write_cell(ws, r_idx, 13, prio1, bg=bg, align="center")
+        write_cell(ws, r_idx, 14, sec_str, bg=bg)
 
     auto_width(ws)
 
@@ -559,9 +575,9 @@ def build_conferences_sheet(wb, h, recs, byid):
     sorted_confs = sorted(confs, key=lambda c: c.get('label', ''))
 
     title_banner(ws, "Production Conferences & Partylines",
-                 f"Total Conferences: {len(confs)}  |  Multi-user matrix partyline channels", max_col=9)
+                 f"Total Conferences: {len(confs)}  |  Multi-user matrix partyline channels", max_col=10)
 
-    headers = ["#", "Conference Label", "Long Name", "Alias", "Trunk Enabled", "DynaConf", "Keypad Shortcut", "Member Count", "Configured Member Ports"]
+    headers = ["#", "Conference Label", "Long Name", "Alias", "Color", "Trunk Enabled", "DynaConf", "Keypad Shortcut", "Member Count", "Configured Member Ports"]
     header_row(ws, 4, headers, bg=C['navy'])
 
     for r_idx, c in enumerate(sorted_confs, 5):
@@ -576,15 +592,18 @@ def build_conferences_sheet(wb, h, recs, byid):
                 p_lbl = m.get('name', '')
                 member_ports.append(f"{p_lbl} ({p_num})" if p_num else p_lbl)
 
+        color_str = A.swatch_color_name(c.get('colour'))
+
         write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
         write_cell(ws, r_idx, 2, c.get('label', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 3, c.get('long_name', ''), bg=bg)
         write_cell(ws, r_idx, 4, c.get('alias', ''), bg=bg)
-        write_cell(ws, r_idx, 5, "Yes" if c.get('trunk_enabled') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 6, "Yes" if c.get('dynaconf') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 7, c.get('keypad_shortcut', '') if c.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
-        write_cell(ws, r_idx, 8, len(member_ports), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 9, ', '.join(member_ports) if member_ports else "—", bg=bg)
+        write_cell(ws, r_idx, 5, color_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 6, "Yes" if c.get('trunk_enabled') else "No", bg=bg, align="center")
+        write_cell(ws, r_idx, 7, "Yes" if c.get('dynaconf') else "No", bg=bg, align="center")
+        write_cell(ws, r_idx, 8, c.get('keypad_shortcut', '') if c.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
+        write_cell(ws, r_idx, 9, len(member_ports), bg=bg, align="center", bold=True)
+        write_cell(ws, r_idx, 10, ', '.join(member_ports) if member_ports else "—", bg=bg)
 
     auto_width(ws)
 
@@ -596,9 +615,9 @@ def build_groups_sheet(wb, h, recs, byid):
     sorted_groups = sorted(groups, key=lambda g: g.get('label', ''))
 
     title_banner(ws, "Directed Talkgroups",
-                 f"Total Groups: {len(groups)}  |  One-to-many broadcast channels", max_col=7)
+                 f"Total Groups: {len(groups)}  |  One-to-many broadcast channels", max_col=8)
 
-    headers = ["#", "Group Label", "Long Name", "Keypad Shortcut", "Member Count", "Trunk Address", "Member Ports List"]
+    headers = ["#", "Group Label", "Long Name", "Color", "Keypad Shortcut", "Member Count", "Trunk Address", "Member Ports List"]
     header_row(ws, 4, headers, bg=C['amber'])
 
     for r_idx, g in enumerate(sorted_groups, 5):
@@ -613,13 +632,16 @@ def build_groups_sheet(wb, h, recs, byid):
                 p_lbl = m.get('name', '')
                 member_ports.append(f"{p_lbl} ({p_num})" if p_num else p_lbl)
 
+        color_str = A.swatch_color_name(g.get('colour'))
+
         write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
         write_cell(ws, r_idx, 2, g.get('label', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 3, g.get('long_name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, g.get('keypad_shortcut', '') if g.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
-        write_cell(ws, r_idx, 5, len(member_ports), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 6, g.get('trunk_address', 0), bg=bg, align="center")
-        write_cell(ws, r_idx, 7, ', '.join(member_ports) if member_ports else "—", bg=bg)
+        write_cell(ws, r_idx, 4, color_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 5, g.get('keypad_shortcut', '') if g.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
+        write_cell(ws, r_idx, 6, len(member_ports), bg=bg, align="center", bold=True)
+        write_cell(ws, r_idx, 7, g.get('trunk_address', 0), bg=bg, align="center")
+        write_cell(ws, r_idx, 8, ', '.join(member_ports) if member_ports else "—", bg=bg)
 
     auto_width(ws)
 
@@ -781,9 +803,9 @@ def build_trunks_sheet(wb, h, recs, byid):
     trunks = [p for p in ports if p['class'] in (0x445, 0x502, 0x508) or p.get('trunk_address')]
 
     title_banner(ws, "Inter-Matrix Digital IP Trunk Lines & VoIP",
-                 f"Total IP Trunks & Connections: {len(trunks)}", max_col=8)
+                 f"Total IP Trunks & Connections: {len(trunks)}", max_col=10)
 
-    headers = ["#", "Port #", "Trunk Line Name", "Short ID", "Trunk Type", "Remote Host / IP", "Trunk Net Address", "Audio Codec / Parameters"]
+    headers = ["#", "Port #", "Trunk Line Name", "Short ID", "Trunk Type", "Local SIP ID", "Remote Host / IP", "Remote SIP ID", "Trunk Net Address", "Audio Codec / Parameters"]
     header_row(ws, 4, headers, bg=C['teal'])
 
     for r_idx, t in enumerate(trunks, 5):
@@ -792,7 +814,9 @@ def build_trunks_sheet(wb, h, recs, byid):
 
         p_num = t['port_strings'][1] if t.get('port_strings') and len(t['port_strings']) > 1 else str(t.get('port_number', ''))
         sip = t.get('port_d0c2c0') or {}
-        remote_ip = sip.get('remote_host', '—')
+        local_id = sip.get('local_sip_id', '—') or '—'
+        remote_ip = sip.get('remote_host', '—') or '—'
+        remote_sip = sip.get('remote_sip_id', '—') or '—'
         codec = sip.get('audio_codec', 'Standard')
 
         write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
@@ -800,9 +824,11 @@ def build_trunks_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 3, t.get('port_str') or t.get('name', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 4, t.get('name', ''), bg=bg, align="center")
         write_cell(ws, r_idx, 5, A.port_type(t, byid), bg=bg, bold=True)
-        write_cell(ws, r_idx, 6, remote_ip, bg=bg, align="center")
-        write_cell(ws, r_idx, 7, t.get('trunk_address', 0), bg=bg, align="center")
-        write_cell(ws, r_idx, 8, codec, bg=bg)
+        write_cell(ws, r_idx, 6, local_id, bg=bg, align="center")
+        write_cell(ws, r_idx, 7, remote_ip, bg=bg, align="center")
+        write_cell(ws, r_idx, 8, remote_sip, bg=bg, align="center")
+        write_cell(ws, r_idx, 9, t.get('trunk_address', 0), bg=bg, align="center")
+        write_cell(ws, r_idx, 10, codec, bg=bg)
 
     auto_width(ws)
 
