@@ -654,7 +654,7 @@ def read_cmd_call_ifb(ar, o):
         o['ifb'] = ar.u32()               # CPhysIFB id (0 / 0xffffffff = none)
     o['key'] = ar.u32()
     if v >= 0x38 and (v < 0x480 or trunk):
-        o['trunk_a'] = ar.u32()
+        o['trunk_net_address'] = ar.u32()            # TrunkingNetAddr
         o['trunk_u16'] = ar.u16()                  # TrunkingIFBNumber
         o['trunk_name'] = ar.string()
     read_cmd_base(ar, o)
@@ -1563,11 +1563,18 @@ def read_sip_phone(ar, o):
     v = ar.version
     f = ar.u8()
     o['sip_flags'] = f
+    # SIP phone connection dialog (534; init FUN_00be8c10, store FUN_00be8420): flag bit 0 -> +0x3a8 (checkbox
+    # beside Domain/Proxy), bit 1 Trusted Domain (+0x3cc), bit 2 Enable auto hangup (+0x3d0).
+    o['trusted_domain'], o['auto_hangup'] = bool(f & 2), bool(f & 4)
     o['sip_strings'] = [ar.string() for _ in range(6)]
+    (o['domain_server'], o['proxy_server'], o['sip_username'], o['display_name'],
+     o['auth_username'], o['auth_password']) = o['sip_strings']
     o['sip_i32'] = ar.i32()
+    o['reregister_time_s'] = o['sip_i32']                # +0x3c8
     o['sip_u32'] = ar.u32()                              # written as 5
     if v > 0x3f:
         o['sip_str7'] = ar.string()
+        o['stun_server'] = o['sip_str7']                 # +0x3ac (STUN Server: Address)
     read_port(ar, o, pool_state=2)
 
 
