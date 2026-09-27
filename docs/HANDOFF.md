@@ -74,8 +74,12 @@ Pitfalls:
   - Every DSP element is named: `AUDIOPATCH_ELEMENT_NAMES`, `audiopatch_element_text()`, `audiopatch_routes()`.
   - Option lists: `BANDPASS_HP`/`LP` (bytes stored LP first), `LIMCOMP_FIELDS` (byte order: limiter attack, release, threshold, output level, then compressor attack, release, ratio, threshold), `AMP_OUT_GAINS`, amp in = 0.5 dB steps.
 - **Groups and conferences.** Keypad shortcut, icon, colour, trunk-enabled, DynaConf, and the MCR flag. Member words are port numbers.
-- **IFB.** Dim scale, label, long name, endpoints.
-- **GPIO.** Inverted and normally closed flags, plus GPIO index.
+- **IFB.** Dim scale, label, long name, endpoints, `is_trunk_enabled` (+0x12, bit 1), `ifb_flag_a` (+0x11, bit 0). Containers have `container_version` (+0x84, constant 2) and `container_index` (+0x88, 0-indexed for "IFB-Container %u of 10").
+- **GPIO.** Inverted and normally closed flags, GPIO index, `channel_selection` (+0x11c, property index 5), and `off_delay` (+0x128, OffDelay in ms up to 10000ms).
+- **Users and permissions.** `user_manager` (+0xa0), `USER_RIGHT_BITS` with 16 decoded permission flags (from CUserPP DIALOG 184 and FUN_00ccd0e0), and object base trailer rights mask (1=Edit, 2=Create children, 4=Delete children).
+- **Logic.** `from_pin` and `to_pin` (output/input pin indices on CPhysLogicLine), `active_inputs` and `not_active_inputs` (triggering Active vs Not Active on CPhysLogicDst), and float coordinates for `rect`.
+- **VoIP and Codecs.** VoIP card properties (`primary_dns`, `secondary_dns`, `tcp_udp_port`, `dns_hostname`, `dscp`, `link_mode`), Codec connection (`channel_selection`, `auto_answer`, `auto_dial_enabled`, `auto_dial_number`), and NSA connections (`input_channel`, `output_channel`).
+- **ZMXIF (`0x48`).** Transcribed from `FUN_00d03c80` and registered in `READERS`.
 - **System settings (CPhysNet).**
   - `net_panel_defaults()`: system Port Defaults 1/2.
   - `net_call_key_defaults()`: Call Defaults and Key Defaults.
@@ -89,17 +93,14 @@ Pitfalls:
 
 1. **Excel output.** Not started. Every decoder helper above returns Director-worded dicts ready for sheets. Show the panel PIN, Live View password and SIP credentials as plain values: per the user, they are courtesy lock-outs (usually 0000 or 1234), not security data.
 2. **Remaining unnamed fields:**
-   - IFB `ifb_flag_a`/`b`. The candidate is IsTrunkEnabled; the IFB property setter is in `%LOCALAPPDATA%\ghidra_projects\ifbp\00c71590.c`/`00c71d40.c`.
-   - Also unnamed: GPIO `gpio_u8`/`gpio_128`, user `user_u16`/`rights` bits, logic `inputs_a/b`/`line_u8a/b`, IFB container `container_u8/u32`, NSA `nsa_u8`, codec `codec_u8`/`codec_str`.
-   - Cards: `sic_u8` (also used in the Node-Bay "(n)"), `sic_u16a/b`, `aes67_*`, `madi_bytes`, `dante_u8`, and VoIP card `voip_u32`/`b1`/`b2`/`u16`/`u8`/`u8b`. Dialog 454 is the VoIP port, not the card; look for the card dialog.
+   - Cards: `sic_u8` (Node-Bay sub-index format `'Bay %d (%d)'` at 0x10b4a70), `sic_u16a/b` (CPhysClientSicAes67 properties include AllocatedPorts / AllocatedGPIOs), `aes67_*`, `madi_bytes`, `dante_u8`.
    - Ports: `port_208`, `port_398`, `port_1e8`; `talk_flag_c1` (Talk bit 11 = `+0xc1`).
    - Nodes: `node_88` (= 0x100 + id), `node_8c`/`90`/`a0`/`a4`, `node_a8` (bit mask `0x2d7fffff`), and `node_4fc`/`4fe`, which look like internal counters.
    - System: `net_72c`/`730`/`734` (defaults 1/0/0), `net_7ec`, `net_colour`.
    - Scheduler and event action fields haven't been reviewed.
 3. **Artist card variants.** Tell apart -108, -208 and G2 on Artist frames.
-4. **ZMXIF (`0x48`).** Transcribe its serializer.
-5. **Colour index → name.** Director draws colours as swatches, with no names in the exe, so colours are left as numbers (16 = none).
-6. **`.bol` files.** Separate work: see the memory note on the Bolero firmware packages.
+4. **Colour index → name.** Director draws colours as swatches, with no names in the exe, so colours are left as numbers (16 = none).
+5. **`.bol` files.** Separate work: see the memory note on the Bolero firmware packages.
 
 ## 6. Spot-check list (one batched test save in Director should settle these)
 
