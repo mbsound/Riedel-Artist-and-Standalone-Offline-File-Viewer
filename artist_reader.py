@@ -1275,6 +1275,11 @@ def net_panel_defaults(net):
     d = panel_settings(p)
     d['Fn key assignment'] = _FN_KEYS_F1F2.get(b['4a4'], 'value %d' % b['4a4'])   # system page offers F1/F2 list
     del d['Rotary mute function']
+    # Checkboxes on the system 'Port Defaults 2' page (dialog 206 via tools/ddx_map.py).
+    d['In-Use Indication at other Panels if Panel receives a call'] = bool(b['4b1'])
+    d['In-Use Indication at other Panels if Panel makes a call'] = bool(b['4b2'])
+    d['Feedback suppression'] = bool(b.get('4b6', 0))
+    d['Copy Reply'] = bool(b.get('4b7', 0))
     d['Response Timeout Telephone Codec'] = '%d ms' % net.get('net_700', 0)
     d['Response Timeout VoIP Ports'] = '%d ms' % net.get('net_702', 0)
     return d
