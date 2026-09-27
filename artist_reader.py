@@ -761,6 +761,7 @@ def read_key(ar, o):
         if ar.u8() != 0xff:
             raise ArtFormatError('key colour marker at 0x%x' % (ar.p - 1))
         o['text_colour'] = ar._take(3).hex()          # +0x122 TextColor
+        o['text_color'] = o['text_colour']
     o['icon'] = ar.u16() if v >= 0x3e and (w1 & 0x800) else 1     # +0x126 Icon: 1 = none
     if v >= 0x3e:
         o['clip_label_6'] = (w1 >> 12) & 1              # +0x128 ClipLabelTo6Chars
@@ -768,6 +769,7 @@ def read_key(ar, o):
         o['subtitle'] = ar.string()                     # Subtitle
         n = ar.i16()
         o['group_colour'] = 16 if n == -1 else n        # +0x134 GroupColor
+        o['group_color'] = o['group_colour']
         o['show_subtitle'] = (w1 >> 15) & 1             # +0x131 ShowSubtitle
         o['auto_subtitle'] = (w1 >> 14) & 1             # +0x130 AutoSubtitle
 
@@ -1203,10 +1205,13 @@ def read_port(ar, o, pool_state=0):
                  'b': ar._take(4).hex()}
             if v >= 0x40:
                 s['s4'] = ar.string()
-            # SIP / VoIP settings (FUN_00d0c2c0; names from getter FUN_00cb9dc0). s2 is RemoteHost (an IP in
-            # the samples); s1 / s3 are RemoteSipId / LocalSipId, order not yet confirmed.
+            # SIP / VoIP settings (FUN_00d0c2c0; names from getter FUN_00cb9dc0):
+            # s1 (+0x08) = LocalSipId, s2 (+0x04) = RemoteHost, s3 (+0x0c) = RemoteSipId.
             bb = bytes.fromhex(s['b'])
-            s['remote_host'], s['audio_codec'] = s['s2'], VOIP_CODECS.get(s['u32'], 'value %d' % s['u32'])
+            s['local_sip_id'] = s['s1']
+            s['remote_host'] = s['s2']
+            s['remote_sip_id'] = s['s3']
+            s['audio_codec'] = VOIP_CODECS.get(s['u32'], 'value %d' % s['u32'])
             s['receive_buffer_size'], s['audio_packet_size'] = _ms(VOIP_RX_BUFFER_MS, bb[0]), _ms(VOIP_PACKET_MS, bb[1])
             s['voice_act_detection'], s['dscp'] = bb[2] == 1, bb[3]
             o['port_d0c2c0'] = s
@@ -1461,6 +1466,27 @@ FUNCTION_COLOR_ORDER = ['Call to Port', 'Call to Conference', 'Call to Group', '
                         'Reply', 'Dim Speaker', 'Dim Level', 'Beep', 'Clone Output Port', 'Logic', 'I/O Gain',
                         'Send String']
 
+# 16-step palette swatches in Director (table 0xfeb6e0 in Director 8.9.D2.exe).
+# Stored as COLORREF 0x00bbggrr; index 16 = None.
+SWATCH_COLORS = {
+    0: ('Orange', 'FFB366'), 1: ('Yellow', 'FFFF73'), 2: ('Yellow-Green', 'D0FF73'),
+    3: ('Light Green', 'A2FF73'), 4: ('Green', '73FF73'), 5: ('Mint', '80FFAA'),
+    6: ('Cyan-Green', '73FFD0'), 7: ('Cyan', '73FFFF'), 8: ('Light Blue', '80AAFF'),
+    9: ('Blue', '7373FF'), 10: ('Indigo', 'B38CFF'), 11: ('Violet', 'D073FF'),
+    12: ('Magenta', 'FF73E8'), 13: ('Rose', 'FF66B3'), 14: ('Red', 'FF6666'),
+    15: ('Light Grey', 'D7D7D7'), 16: ('None', None)
+}
+
+
+def swatch_color_name(c):
+    """Return 'Name (#RRGGBB)' or 'None' for Director colour index 0..16."""
+    if c is None or c == 16:
+        return 'None'
+    entry = SWATCH_COLORS.get(c)
+    if entry:
+        return f"{entry[0]} (#{entry[1]})"
+    return str(c)
+
 
 # Key marker names (CPhysNet key_markers entry i = marker i). From Director's static table 0xfee9c0
 # (123 entries: name, default display flags, default priority). 'a' = priority (lower wins), flags = display.
@@ -1567,7 +1593,7 @@ def net_general(net):
         'Define colors automatically': net.get('define_colors_automatically', False),
     }
     for name, c in zip(FUNCTION_COLOR_ORDER, net.get('net_7a0') or []):
-        out['Function color: ' + name] = 'none' if c == 16 else c
+        out['Function color: ' + name] = swatch_color_name(c)
     return out
 
 
@@ -1806,6 +1832,7 @@ def read_group(ar, o):
         o['icon'] = ar.u16()                              # +0x92 Signalization: Icon (1 = none)
         n = ar.i16()
         o['colour'] = 16 if n == -1 else n                # +0x94 Signalization: Color (16 = none)
+        o['color'] = o['colour']
 
 
 def read_conference(ar, o):
@@ -1828,6 +1855,7 @@ def read_conference(ar, o):
         o['icon'] = ar.u16()                              # +0xac Signalization: Icon (1 = none)
         n = ar.i16()
         o['colour'] = 16 if n == -1 else n                # +0xae Signalization: Color (16 = none)
+        o['color'] = o['colour']
 
 
 # Audio patch element chain built by the constructor (FUN_00c1f0c0(0, 0)), in array order.
