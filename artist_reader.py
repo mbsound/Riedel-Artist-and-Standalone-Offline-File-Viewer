@@ -927,7 +927,15 @@ PSU_NAMES = {3: 'PSU-32 G2', 4: 'PSU-64 G2', 5: 'PSU-128 G2', 6: 'PSU-32+16', 7:
 # Card model names on Performer frames (confirmed 2026-09-26 on Performer 32-16 / 32-80).
 PERFORMER_CARD_NAMES = {0x101: 'COAX-008', 0x102: 'CAT5-008', 0x103: 'AIO-008', 0x108: 'VoIP-008',
                         0x201: 'ELA-OP-016', 0x052: 'CPU-032', 0x06a: 'CPU-032M'}
-# Artist frames: the same classes are the -108 cards; G2 / -208 variants are not yet told apart.
+# Card model names on Artist 32 / 64 / 128 frames (node_type 3, 4, 5): G2 series (FUN_00ccbb20).
+ARTIST_G2_CARD_NAMES = {0x101: 'COAX-108 G2', 0x102: 'CAT5-108 G2 / AES-108 G2', 0x103: 'AIO-108 G2',
+                        0x107: 'MADI-108 G2', 0x108: 'VoIP-108 G2', 0x109: 'AES67-108 G2', 0x10a: 'DANTE-108 G2'}
+# Card model names on Artist S frames (node_type 1): -208 series (FUN_00ccbb20).
+ARTIST_S_CARD_NAMES = {0x101: 'COX-208', 0x102: 'CAT5-208 / AES-208', 0x103: 'AIO-208'}
+# SIC cards on Artist 1024 frames (node_type 9) (FUN_00ccbb20).
+ARTIST_1024_CARD_NAMES = {0x10b: 'SIC AES67', 0x10c: 'NIC', 0x10d: 'SIC AES67 Container',
+                          0x10e: 'SIC MADI', 0x10f: 'SIC Dante'}
+# Classic Artist M frames (node_type 0) and generic fallback.
 ARTIST_CARD_NAMES = {0x101: 'COAX-108', 0x102: 'CAT5-108 / AES-108', 0x103: 'AIO-108', 0x107: 'MADI-108',
                      0x108: 'VoIP-108', 0x109: 'AES67-108', 0x10a: 'DANTE-108', 0x201: 'GPIO card',
                      0x037: 'CPU-128F', 0x038: 'CPU-128HP', 0x039: 'CPU-128S', 0x04c: 'CPU-128SD1',
@@ -935,12 +943,23 @@ ARTIST_CARD_NAMES = {0x101: 'COAX-108', 0x102: 'CAT5-108 / AES-108', 0x103: 'AIO
 
 
 def card_model(card, node):
-    """Model name of a bay card, CPU or PSU as Director shows it, given the node it sits in."""
-    if card['class'] == 0x00f:                           # CPhysPowerSupply
-        return PSU_NAMES.get(node['node_type'], 'PSU')
-    if node['node_type'] in (6, 7):
-        return PERFORMER_CARD_NAMES.get(card['class'], 'class 0x%x' % card['class'])
-    return ARTIST_CARD_NAMES.get(card['class'], 'class 0x%x' % card['class'])
+    """Model name of a bay card, CPU or PSU as Director shows it, given the node it sits in (FUN_00ccbb20)."""
+    cls = card['class']
+    nt = node.get('node_type', 0) if node else 0
+    if cls == 0x00f:                           # CPhysPowerSupply
+        return PSU_NAMES.get(nt, 'PSU')
+    if nt in (6, 7):                           # Performer 32-16 / 32-80
+        return PERFORMER_CARD_NAMES.get(cls, 'class 0x%x' % cls)
+    if nt == 9:                                # Artist 1024
+        if cls in ARTIST_1024_CARD_NAMES:
+            return ARTIST_1024_CARD_NAMES[cls]
+    if nt == 1:                                # Artist S
+        if cls in ARTIST_S_CARD_NAMES:
+            return ARTIST_S_CARD_NAMES[cls]
+    if nt in (3, 4, 5):                        # Artist 32 / 64 / 128
+        if cls in ARTIST_G2_CARD_NAMES:
+            return ARTIST_G2_CARD_NAMES[cls]
+    return ARTIST_CARD_NAMES.get(cls, 'class 0x%x' % cls)
 
 
 def read_node(ar, o):
