@@ -1434,13 +1434,35 @@ MARKER_NAMES = [
     'Edit IFB, Mix Minus will be used by the selected IFB', 'Hot Mic activated', 'Hot Mic deactivated']
 
 
+_C1000 = ['off', 'green', 'red', 'yellow']
+_C2000 = ['off', 'red', 'green', 'yellow', 'blue', 'purple', 'turquoise', 'white']
+
+
+def marker_display(flags):
+    """Decode a key marker's display flags (Edit definition dialog FUN_00a9ef70 / FUN_00a9eb70)."""
+    b0, b1, b2, b3 = flags & 0xff, (flags >> 8) & 0xff, (flags >> 16) & 0xff, (flags >> 24) & 0xff
+    base = b0 >> 5
+    flash_to = ((b0 >> 2) & 7) ^ base if b0 & 0x1c else None
+    return {
+        '1000 series background': ' '.join(_C1000[((b3 >> n) & 1) * 2 + ((b2 >> n) & 1)] for n in range(8)),
+        '1000 series crosspoint level color': _C1000[(b1 >> 2) & 3],
+        '1000 series muted crosspoint level color': _C1000[(b1 >> 4) & 3],
+        '1000 series flash': bool(b1 & 0x80),
+        'Show crosspoint level in foreground': bool(b1 & 0x40),
+        '2000 series base color': _C2000[base],
+        '2000 series flash to color': _C2000[flash_to] if flash_to is not None else '',
+        'RIF LED state': _pick(['off', 'on', 'flash'], b1 & 3),
+    }
+
+
 def net_markers(net):
     """Key marker definitions (Marker definition dialog): [(marker name, priority, extra, display flags)]."""
     out = []
     for i, m in enumerate(net.get('key_markers') or []):
         name = MARKER_NAMES[i] if i < len(MARKER_NAMES) else 'Marker %d' % i
-        out.append({'marker': name, 'priority': m['a'], 'extra': m['b'], 'display_flags': '%08x' % m['flags'],
-                    'user_name': m['name']})
+        row = {'marker': name, 'priority': m['a'], 'persistence_timeout_s': m['b'], 'user_name': m['name']}
+        row.update(marker_display(m['flags']))
+        out.append(row)
     return out
 
 
