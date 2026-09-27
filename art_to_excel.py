@@ -97,6 +97,26 @@ def write_cell(ws, row_idx, col_idx, val, bg=None, fg="000000", bold=False, alig
     return c
 
 
+def is_dark_hex(hex_str):
+    if not hex_str or len(hex_str) < 6:
+        return False
+    try:
+        r, g, b = int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16)
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 140
+    except ValueError:
+        return False
+
+
+def get_swatch_fill_fg(idx):
+    if idx is None or idx == 16 or idx not in A.SWATCH_COLORS:
+        return None, "000000"
+    name, hex_code = A.SWATCH_COLORS[idx]
+    if not hex_code:
+        return None, "000000"
+    fg = "FFFFFF" if is_dark_hex(hex_code) else "000000"
+    return hex_code, fg
+
+
 def auto_width(ws, extra=3, max_w=65):
     for col in ws.columns:
         ltr = get_column_letter(col[0].column)
@@ -549,6 +569,11 @@ def build_panels_keys_sheet(wb, h, recs, byid):
         timeout_str = A.LATCHING_TIMEOUTS[k['latching_timeout']] if k.get('latching_timeout', 0) < len(A.LATCHING_TIMEOUTS) else str(k.get('latching_timeout', ''))
         grp_c = A.swatch_color_name(k.get('group_colour'))
         txt_c = f"#{k['text_colour'].upper()}" if k.get('text_colour') else "Default"
+        grp_fill, grp_fg = get_swatch_fill_fg(k.get('group_colour'))
+        txt_fill, txt_fg = None, "000000"
+        if k.get('text_colour'):
+            txt_fill = k['text_colour'].upper()
+            txt_fg = "FFFFFF" if is_dark_hex(txt_fill) else "000000"
 
         write_cell(ws, r_idx, 1, panel_name, bg=bg, bold=True)
         write_cell(ws, r_idx, 2, port_num, bg=bg, align="center")
@@ -556,8 +581,8 @@ def build_panels_keys_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 4, f"Key {slot_num}", bg=bg, align="center", bold=True)
         write_cell(ws, r_idx, 5, k.get('label', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 6, k.get('subtitle', ''), bg=bg)
-        write_cell(ws, r_idx, 7, grp_c, bg=bg, align="center")
-        write_cell(ws, r_idx, 8, txt_c, bg=bg, align="center")
+        write_cell(ws, r_idx, 7, grp_c, bg=grp_fill or bg, fg=grp_fg if grp_fill else "000000", bold=bool(grp_fill), align="center")
+        write_cell(ws, r_idx, 8, txt_c, bg=txt_fill or bg, fg=txt_fg if txt_fill else "000000", bold=bool(txt_fill), align="center")
         write_cell(ws, r_idx, 9, k.get('mode', 'Momentary'), bg=bg, align="center")
         write_cell(ws, r_idx, 10, timeout_str, bg=bg, align="center")
         write_cell(ws, r_idx, 11, fn1, bg=bg, bold=True)
@@ -593,12 +618,13 @@ def build_conferences_sheet(wb, h, recs, byid):
                 member_ports.append(f"{p_lbl} ({p_num})" if p_num else p_lbl)
 
         color_str = A.swatch_color_name(c.get('colour'))
+        c_fill, c_fg = get_swatch_fill_fg(c.get('colour'))
 
         write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
         write_cell(ws, r_idx, 2, c.get('label', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 3, c.get('long_name', ''), bg=bg)
         write_cell(ws, r_idx, 4, c.get('alias', ''), bg=bg)
-        write_cell(ws, r_idx, 5, color_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 5, color_str, bg=c_fill or bg, fg=c_fg if c_fill else "000000", bold=bool(c_fill), align="center")
         write_cell(ws, r_idx, 6, "Yes" if c.get('trunk_enabled') else "No", bg=bg, align="center")
         write_cell(ws, r_idx, 7, "Yes" if c.get('dynaconf') else "No", bg=bg, align="center")
         write_cell(ws, r_idx, 8, c.get('keypad_shortcut', '') if c.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
@@ -633,11 +659,12 @@ def build_groups_sheet(wb, h, recs, byid):
                 member_ports.append(f"{p_lbl} ({p_num})" if p_num else p_lbl)
 
         color_str = A.swatch_color_name(g.get('colour'))
+        g_fill, g_fg = get_swatch_fill_fg(g.get('colour'))
 
         write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
         write_cell(ws, r_idx, 2, g.get('label', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 3, g.get('long_name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, color_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 4, color_str, bg=g_fill or bg, fg=g_fg if g_fill else "000000", bold=bool(g_fill), align="center")
         write_cell(ws, r_idx, 5, g.get('keypad_shortcut', '') if g.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
         write_cell(ws, r_idx, 6, len(member_ports), bg=bg, align="center", bold=True)
         write_cell(ws, r_idx, 7, g.get('trunk_address', 0), bg=bg, align="center")
@@ -960,7 +987,7 @@ if __name__ == '__main__':
 
     if not args:
         # Default: process all .Art files in parent and current directory
-        files = glob.glob('../*.Art') + glob.glob('../**/*.Art', recursive=True)
+        files = sorted(set(glob.glob('../*.Art') + glob.glob('../**/*.Art', recursive=True)))
         for f in files:
             try:
                 export_art_to_excel(f)
