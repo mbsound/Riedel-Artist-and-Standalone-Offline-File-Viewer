@@ -741,7 +741,9 @@ def read_key(ar, o):
     if v >= 0x2f0:
         w2 = ar.u16()
         o['flags2'] = w2
-        o['monitoring_state'] = w2 & 1                  # +0x138 'Monitoring state on key' (key dialog, 2 options)
+        o['monitoring_state'] = w2 & 1                  # +0x138 'Monitoring state on key'
+        # option names from the static list built at 0x6d1dd7 (table 0x12fe24c): 0 'initial off', 1 'initial on'
+        o['monitoring_state_name'] = ('initial off', 'initial on')[o['monitoring_state']]
         if v >= 0x350:
             o['use_scroll_list_key_mode'] = (w2 >> 1) & 1   # +0x140 UseScrollListEntryKeyMode
         if v >= 0x560:
@@ -1270,7 +1272,8 @@ def read_port(ar, o, pool_state=0):
         o['phone_book'] = ar.u32()
     if v >= 0x380:
         o['port_338'] = ar.u16()
-        o['keypad_shortcut'] = None if o['port_338'] == 0xffff else o['port_338']   # like groups (+0x90); to spot-check
+        # Keypad shortcut: confirmed - FUN_00cfd900 ('Keypad Shortcut(s) changed to <none>') writes +0x338.
+        o['keypad_shortcut'] = None if o['port_338'] == 0xffff else o['port_338']
 
 
 # Director's 'Port Type' column (checked against the Ports grid export, docs/director_exports/crazy_ports.csv).
@@ -1389,8 +1392,9 @@ def net_call_key_defaults(net):
         'Call to Group: Call Prio': pr(b['4c5']),
         'Listen to Port: Call Prio': pr(b['4c6']),
         'Route Audio: Call Prio': pr(b['4c8']),
-        # Key Defaults. Key Mode uses the key's internal values (1 Auto, 2 Momentary, 3 Latching) - to spot-check.
-        'Key Mode': {1: 'Auto', 2: 'Momentary', 3: 'Latching'}.get(b['4be'], 'value %d' % b['4be']),
+        # Key Defaults page (dialog 207).
+        # stored as the list position of FUN_00b12360's list (store FUN_00b93b10 writes CB_GETCURSEL directly)
+        'Key Mode': _pick(['Auto', 'Momentary (PTT)', 'Latching'], b['4be']),
         'Latching Timeout': _pick(LATCHING_TIMEOUTS, b['4d1']),
         'Activate Speaker Dim': bool(b['4bf']),
         'Restore volume level': bool(b['4c1']),
@@ -1673,8 +1677,10 @@ def read_sip_phone(ar, o):
     v = ar.version
     f = ar.u8()
     o['sip_flags'] = f
-    # SIP phone connection dialog (534; init FUN_00be8c10, store FUN_00be8420): flag bit 0 -> +0x3a8 (checkbox
-    # beside Domain/Proxy), bit 1 Trusted Domain (+0x3cc), bit 2 Enable auto hangup (+0x3d0).
+    # SIP phone connection dialog (534; init FUN_00be8c10, store FUN_00be8420): flag bit 0 -> +0x3a8 = the
+    # 'SIP transport protocol' UDP radio (control 0x732; TCP is 0x731), bit 1 Trusted Domain (+0x3cc),
+    # bit 2 Enable auto hangup (+0x3d0).
+    o['sip_transport'] = 'UDP' if f & 1 else 'TCP'
     o['trusted_domain'], o['auto_hangup'] = bool(f & 2), bool(f & 4)
     o['sip_strings'] = [ar.string() for _ in range(6)]
     (o['domain_server'], o['proxy_server'], o['sip_username'], o['display_name'],

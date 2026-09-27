@@ -158,8 +158,9 @@ To maximize throughput and prevent file conflicts, work on Artist is strictly pa
 - [x] **Artist Card Variants:** CONFIRMED. `FUN_00ccbb20` computes card variants (-108, -208, G2, -008, SIC) based on chassis `node['node_type']`.
 - [x] **Swatch Color Palette:** CONFIRMED. Table `0xfeb6e0` contains 16 COLORREF swatches (0..15 + 16 None).
 - [x] **IFB Flags (+0x11 / +0x12):** CONFIRMED. `f & 1` (+0x11) = internal engine flag, `(f >> 1) & 1` (+0x12) = `is_trunk_enabled`.
-- [ ] **System Key Defaults "Key Mode" (`net_bytes['4be']` = 1):** Read as Auto; verify against Dialog 207 combo options.
-- [ ] **Port Keypad Shortcut = `port_338` (65535 = none):** Verify control ID in Dialog 211 / Ports grid.
-- [ ] **Key "Monitoring state on key" (`monitoring_state`, 2 options):** Names in Dialog 205 (Key Details).
-- [ ] **SIP phone connection flag bit 0 (`+0x3a8`):** Which checkbox in Dialog 639 / 676.
-- [ ] **System Default "Copy Reply":** Confirm Dialog 208 checkbox mapping for `net_bytes['...']`.
+- [x] **VoIP SIP-ID getters (re-verified by Claude):** `FUN_007dcbd0` (LocalSipId) reads block `+0x08`, `FUN_007dcba0` (RemoteSipId) reads `+0x0c`.
+- [x] **System Key Defaults "Key Mode" (`net_bytes['4be']`):** stored as the list position of `FUN_00b12360` (Auto / Momentary (PTT) / Latching); the store `FUN_00b93b10` writes CB_GETCURSEL directly. Value 1 = **Momentary (PTT)** (not Auto).
+- [x] **Port Keypad Shortcut = `port_338` (65535 = none):** `FUN_00cfd900` ("%s %i Keypad Shortcut(s) changed to <none>") writes `+0x338`.
+- [x] **Key "Monitoring state on key"** (`monitoring_state` / `monitoring_state_name`): 0 = "initial off", 1 = "initial on" (list built at `0x6d1dd7` into `0x12fe24c`).
+- [x] **SIP phone connection flag bit 0 (`+0x3a8`):** the "SIP transport protocol" **UDP** radio (control `0x732`; TCP is `0x731`) → `sip_transport`.
+- [x] **System Default "Copy Reply":** `+0x4b7` <- dialog 206 checkbox 1879 "Enable Copy Reply" (FUN_00b97dd0). Only stored from schema `0x560` (8.9), so 8.6 files have no value (read as False); CRAZY's True is real.
