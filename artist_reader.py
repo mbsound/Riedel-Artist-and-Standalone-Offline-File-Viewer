@@ -482,7 +482,7 @@ MONITORING_NAMES = ['switchable', 'always on', 'always off']
 # Call-to-Port flag word bits (save code FUN_00c543d0; property setter FUN_00c51640).
 TALK_FLAG_BITS = {0: 'isolate', 1: 'isolate_self', 2: 'autolisten_from_dest', 3: 'beep_dest_on_call',
                   4: 'allow_set_in_out_gain', 5: 'duplex_call', 8: 'allow_telephone_call',
-                  9: 'allow_fixed_number', 10: 'allow_phonebook', 11: 'talk_flag_c1'}
+                  9: 'allow_fixed_number', 10: 'allow_phonebook', 11: 'allow_dialpad'}
 
 
 def read_cmd_head(ar, o, key='cmd_u8'):
@@ -534,6 +534,7 @@ def read_cmd_talk(ar, o):
     # Bits per the save code FUN_00c543d0 and property setter FUN_00c51640.
     for bit, name in TALK_FLAG_BITS.items():
         o[name] = bool(f & (1 << bit))
+    o['talk_flag_c1'] = o['allow_dialpad']
     if v >= 0x28:
         o['talk_mode'] = f & 0x27
         if v >= 0x2f0:
@@ -1087,7 +1088,8 @@ def read_port(ar, o, pool_state=0):
     """CPhys11xxBase load FUN_00cad990: every port, panel and beltpack type.
     pool_state 2 = the port is a pool holder (CDM-102 sets it via FUN_00be1700)."""
     v, cls = ar.version, o['class']
-    o['port_208'] = ar.u8() if v >= 0x390 else 0xffffffff
+    # +0x208: port architecture / hosting type: 0 = SIC AES67 card, 1 = classic client card, 2 = virtual/connection
+    o['port_architecture'] = o['port_208'] = ar.u8() if v >= 0x390 else 0xffffffff
     if v > 0x36:
         read_pool_holder(ar, o, pool_state)
     if v < 0x2c:
@@ -1132,6 +1134,7 @@ def read_port(ar, o, pool_state=0):
         ar.skip(4 * ar.u32())
     if v < 0x2e:
         o['port_1e8'] = ar.u8()
+        o['second_audio_channel'] = bool(o['port_1e8'])
     o['speaker_dim'] = ar.u8()
     if v < 0x2e:
         ar.skip(2)
@@ -1212,7 +1215,7 @@ def read_port(ar, o, pool_state=0):
             o['input_channel'], o['output_channel'] = o['port_c10a80']        # port +0x228 block
         o['port_str'] = ar.string()
     if v > 0x30:
-        o['port_398'] = list(ar._take(ar.u8()))
+        o['audiopatch_flags'] = o['port_398'] = list(ar._take(ar.u8()))   # +0x398: 9-byte array of Audiopatch bypass/mute flags
         o['fn_key_assignment'] = ar.u8()
     if v >= 0x3d and v >= 0x2d and (flags >> 21) & 1:
         if ar.u8() != 0xff:
