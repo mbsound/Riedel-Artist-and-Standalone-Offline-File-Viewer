@@ -1430,12 +1430,16 @@ AUDIOPATCH_CHAIN = ([('crosspoint', 2)] * 36 + [('amp20db', 1)] * 2 + [('switch'
 
 # Crosspoint names, by index in the 36-crosspoint block. Default patches leave only #4 and #24 unmuted.
 # Confirmed 2026-09-26: muting Panel Mic -> Matrix Channel A on port 1.1 set #4 in both patches.
-# The 36 crosspoints are a 6 x 6 grid, index = input * 6 + output (confirmed 2026-09-26 by test saves of #4,
-# #24-#29 on port 1.1; row/column names as Director shows them). Speaker and headset share input 0 and output 0.
-AUDIOPATCH_INPUTS = ['Panel Mic + Headset A', 'External Mic + Headset B', 'Audio In A', 'Audio In B',
-                     'Matrix Ch. 1', 'Matrix Ch. 2']
-AUDIOPATCH_OUTPUTS = ['Speaker/Headset Out', 'External Out/Headset B', 'Audio Out A', 'Audio Out B',
-                      'Matrix Ch. 1', 'Matrix Ch. 2']                    # Matrix Ch. 2 needs the 2nd audio channel
+# The 36 crosspoints are a 6 x 6 grid, index = input * 6 + output (confirmed by test saves of #4, #24-#29).
+# Names are Director's own (FUN_00c1c930); CCP-1116 panels (class 0x432) use the second wording.
+AUDIOPATCH_INPUTS = ['Panel Mic / Headset A', 'External Mic / Headset B', 'Audio In A', 'Audio In B',
+                     'Matrix Channel 1', 'Matrix Channel 2']
+AUDIOPATCH_OUTPUTS = ['Speaker + Headset A', 'External Out + Headset B', 'Audio Out A', 'Audio Out B',
+                      'Matrix Channel 1', 'Matrix Channel 2']             # Matrix Channel 2 needs the 2nd channel
+AUDIOPATCH_INPUTS_CCP = ['Panel Mic / Headset Intercom A', 'Line In / Headset Intercom B', 'Mic A', 'Mic B',
+                         'Matrix Channel 1', 'Matrix Channel 2']
+AUDIOPATCH_OUTPUTS_CCP = ['Speaker + Headset Intercom A', 'External Speaker + Headset Intercom B', 'Phones A',
+                          'Phones B', 'Matrix Channel 1', 'Matrix Channel 2']
 AUDIOPATCH_CROSSPOINT_NAMES = {i * 6 + o: '%s -> %s' % (AUDIOPATCH_INPUTS[i], AUDIOPATCH_OUTPUTS[o])
                                for i in range(6) for o in range(6)}
 
@@ -1456,24 +1460,35 @@ LIMCOMP_FIELDS = [('Limiter Attack', _ATTACK), ('Limiter Release', _RELEASE),
                   ('Compressor Ratio', ['1:1', '1.25:1', '1.6:1', '2.5:1', '4:1', '8:1']),
                   ('Compressor Threshold', ['%d dB' % v for v in range(12, -51, -3)])]
 # Element names (index in the 67-element chain). Confirmed on port 1.1: 36, 37, 39, 40, 43, 44, 47, 48.
-# Element names (index in the 67-element chain), laid out as Director's audio patch diagram.
-# Confirmed on port 1.1: 36-40, 43, 44, 47, 48, 59, 61. Headset A and B preamps are one linked preamp (dashed
-# link in the diagram); Panel Mic's preamp is fixed on RCP panels. Switch 38: 1 = mics (Speaker mode),
-# 0 = headsets (Headset mode). Output order Speaker, External Out, Headset A, Headset B, Audio Out A/B is the
-# one that fits amp #0 = Speaker and #2 = Headset A; #1 and #3-#5 not yet confirmed by a save.
+# Element names (index in the chain), from Director's element-name functions (FUN_00c1b1f0 amp in,
+# FUN_00c1b9d0 amp out, FUN_00c1c080 bandpass). Headset A and B share one linked preamp (#37); Panel Mic's
+# preamp is fixed on RCP panels. Switch #38: 1 = Panel Mic / External Mic (Speaker mode), 0 = Headset A / B.
+_INS = ['Panel Mic / Headset A', 'External Mic / Headset B', 'Audio In A', 'Audio In B']
 _OUTS = ['Speaker', 'External Out', 'Headset A', 'Headset B', 'Audio Out A', 'Audio Out B']
-AUDIOPATCH_ELEMENT_NAMES = {36: 'External Mic preamp', 37: 'Headset A + B preamp (linked)',
-                            38: 'Mic / headset switch',
-                            39: 'Panel Mic/Headset A amp', 40: 'External Mic/Headset B amp',
-                            41: 'Audio In A amp', 42: 'Audio In B amp',
-                            43: 'Panel Mic/Headset A bandpass', 44: 'External Mic/Headset B bandpass',
-                            45: 'Audio In A bandpass', 46: 'Audio In B bandpass',
-                            47: 'Panel Mic/Headset A limiter/compressor',
-                            48: 'External Mic/Headset B limiter/compressor'}
-AUDIOPATCH_ELEMENT_NAMES.update({49 + i: n + ' bandpass' for i, n in enumerate(_OUTS)})
-AUDIOPATCH_ELEMENT_NAMES.update({55 + i: n + ' limiter/compressor' for i, n in enumerate(_OUTS[:4])})
-AUDIOPATCH_ELEMENT_NAMES.update({59 + i: n + ' amp' for i, n in enumerate(_OUTS)})
+_INS_CCP = ['Panel Mic / Headset Intercom A', 'Line In / Headset Intercom B', 'Mic A', 'Mic B']
+_OUTS_CCP = ['Speaker', 'External Speaker', 'Headset Intercom A', 'Headset Intercom B', 'Phones A', 'Phones B']
+
+
+def _element_names(ins, outs):
+    n = {36: 'External Mic preamp', 37: 'Headset A / B preamp (linked)', 38: 'Mic / headset switch'}
+    n.update({39 + i: x + ' amp' for i, x in enumerate(ins)})
+    n.update({43 + i: x + ' bandpass' for i, x in enumerate(ins)})
+    n.update({47 + i: x + ' limiter/compressor' for i, x in enumerate(ins[:2])})
+    n.update({49 + i: x + ' bandpass' for i, x in enumerate(outs)})
+    n.update({55 + i: x + ' limiter/compressor' for i, x in enumerate(outs[:4])})
+    n.update({59 + i: x + ' amp' for i, x in enumerate(outs)})
+    return n
+
+
+AUDIOPATCH_ELEMENT_NAMES = _element_names(_INS, _OUTS)
+AUDIOPATCH_ELEMENT_NAMES_CCP = _element_names(_INS_CCP, _OUTS_CCP)
 AUDIOPATCH_AMP_OUT_NAMES = dict(enumerate(_OUTS))
+# Output amp gain list (FUN_00614000): 38 fixed steps, stored as the position.
+AMP_OUT_GAINS = ['0 dB', '-0.6 dB', '-1.2 dB', '-1.7 dB', '-2.3 dB', '-2.9 dB', '-3.5 dB', '-4.1 dB', '-6.1 dB',
+                 '-6.6 dB', '-7.2 dB', '-7.7 dB', '-8.3 dB', '-8.9 dB', '-9.4 dB', '-10.0 dB', '-12.2 dB', '-12.7 dB',
+                 '-13.3 dB', '-13.8 dB', '-14.4 dB', '-15.0 dB', '-15.5 dB', '-16.1 dB', '-17.9 dB', '-18.6 dB',
+                 '-19.2 dB', '-19.8 dB', '-20.4 dB', '-20.9 dB', '-21.5 dB', '-22.1 dB', '-24.6 dB', '-25.2 dB',
+                 '-25.8 dB', '-26.4 dB', '-27.0 dB', '-27.6 dB']
 
 
 def audiopatch_element_text(el):
@@ -1488,8 +1503,7 @@ def audiopatch_element_text(el):
     if k == 'amp_in':
         return '%+.1f dB%s' % (el['gain'] / 2, ', muted' if el['muted'] else '')
     if k == 'amp_out':
-        g = '0 dB' if el['gain'] == 0 else 'step -%d' % el['gain']      # non-zero steps not yet mapped to dB
-        return g + (', muted' if el['muted'] else '')
+        return _pick(AMP_OUT_GAINS, el['gain']) + (', muted' if el['muted'] else '')
     if k == 'bandpass':
         lp, hp = el['values']                            # stored low pass first (confirmed: HP 200 Hz -> [0, 8])
         return 'HP %s, LP %s' % (_pick(BANDPASS_HP, hp), _pick(BANDPASS_LP, lp))

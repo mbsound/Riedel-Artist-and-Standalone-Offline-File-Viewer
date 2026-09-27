@@ -68,9 +68,21 @@ Then compare `out/*.json` with `art_extractor.parse_art_file()` and `bol_extract
 - Only named antennas are stored.
 
 **Keys**
-- Key token: `[type][sub][id][func][mode]`. Types: `02` partyline, `01` P2P (target is a beltpack ID), `05`/`06` audio.
-- Mode byte: `0` = **Auto** (inferred: it's the unset value, the most common, and Auto is Bolero's default). `1` and `2` are Momentary and Latching in an **unconfirmed** order. `4` appears on some reply keys and is unknown.
+- Key token: `[type][sub][id][func][mode]`.
+- **Type byte = firmware `AUDIO_PORT_TYPE`** (confirmed from firmware, see `FIRMWARE_ENUMS.md`):
+  `01` BP → P2P (target is a beltpack ID), `02` PL → partyline, `05` audio-channel input,
+  `06` audio-channel output; `03` bi-dir and `07`–`09` triggers are defined but unseen in samples.
+- ⚠ **CONFIRMED via Ghidra decompile of libRadon.so (see `BOL_SAVE_FORMAT.md` & `FIRMWARE_ENUMS.md`):**
+  The save file uses `BPKey::unpack` (not `RTXSerializer`, which is for live network transmission).
+  Per key layout is: `[u8 function][u8 mode][u8 priority][u8 destflags][u8 muted][u8 dpm][AudioPortId target]`
+  + optional `[i8][u32]` FSP if `function == 7`.
+  **function = `KEY_FUNCTIONS_ENUM`** (0 None, 1 Talk, 2 Talk+AlwaysListen, 3 Talk&Listen, 4 Listen, 9 Reply, …).
+  **mode = `BPKeyMode`** (0 Momentary, 1 Latching, 2 Auto, 3 On-only, 4 Off-only).
+  **priority = `BPKeyPriority`** (0 Standard, 1 High, 2 Low).
+  The old `FUNC_MAP`/`MODE_MAP` in `bol_extractor.py` were wrong and have been replaced with the firmware-exact
+  `bol_faithful.py` routines.
 - A `.bol` does not contain live RF or online state, nor net masters.
+
 
 ---
 
