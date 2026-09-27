@@ -698,12 +698,12 @@ def read_key(ar, o):
     if v >= 0x2f0:
         w2 = ar.u16()
         o['flags2'] = w2
-        o['key_b138'] = w2 & 1
+        o['monitoring_state'] = w2 & 1                  # +0x138 'Monitoring state on key' (key dialog, 2 options)
         if v >= 0x350:
             o['use_scroll_list_key_mode'] = (w2 >> 1) & 1   # +0x140 UseScrollListEntryKeyMode
         if v >= 0x560:
-            o['key_b132'] = (w2 >> 8) & 1
-    o['key_b141'] = (w2 >> 2) if v >= 0x430 else None
+            o['signalization_auto'] = (w2 >> 8) & 1     # +0x132 Signalization: Define automatically
+    o['scroll_list'] = (w2 >> 2) if v >= 0x430 else None   # +0x141 'Use Scroll-List' entry (63 = none)
     o['radio_button'] = ar.u8()                            # +0x118 RadioButton group (0 = none)
     if v < 0x25:
         ar.u8()
@@ -1194,6 +1194,7 @@ def read_port(ar, o, pool_state=0):
         o['phone_book'] = ar.u32()
     if v >= 0x380:
         o['port_338'] = ar.u16()
+        o['keypad_shortcut'] = None if o['port_338'] == 0xffff else o['port_338']   # like groups (+0x90); to spot-check
 
 
 # Director's 'Port Type' column (checked against the Ports grid export, docs/director_exports/crazy_ports.csv).
@@ -1693,11 +1694,11 @@ def read_group(ar, o):
         o['member_flags'] = list(ar._take(len(live)))
     read_member_gpio_tail(ar, o)
     if v >= 0x380:
-        o['group_90'] = ar.u16()
+        o['keypad_shortcut'] = ar.u16()                   # +0x90 Keypad shortcut (65535 = none; setter FUN_00c6f4f0)
     if v > 0x55f:
-        o['group_92'] = ar.u16()
+        o['icon'] = ar.u16()                              # +0x92 Signalization: Icon (1 = none)
         n = ar.i16()
-        o['group_94'] = 16 if n == -1 else n
+        o['colour'] = 16 if n == -1 else n                # +0x94 Signalization: Color (16 = none)
 
 
 def read_conference(ar, o):
@@ -1714,10 +1715,12 @@ def read_conference(ar, o):
     if v >= 0x11:
         o['member_flags'] = list(ar._take(len(members)))   # & 0xef on load
     read_member_gpio_tail(ar, o)
+    # flags (FUN_00c59e90): bit 0 Enable for trunk call, bit 2 -> +0xa0 (MCR use), bit 4 DynaConf
+    o['trunk_enabled'], o['mcr_use'], o['dynaconf'] = bool(o['flags'] & 1), bool(o['flags'] & 4), bool(o['flags'] & 0x10)
     if v > 0x55f:
-        o['conf_ac'] = ar.u16()
+        o['icon'] = ar.u16()                              # +0xac Signalization: Icon (1 = none)
         n = ar.i16()
-        o['conf_ae'] = 16 if n == -1 else n
+        o['colour'] = 16 if n == -1 else n                # +0xae Signalization: Color (16 = none)
 
 
 # Audio patch element chain built by the constructor (FUN_00c1f0c0(0, 0)), in array order.
