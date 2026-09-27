@@ -1135,8 +1135,8 @@ def read_port(ar, o, pool_state=0):
             # SIP / VoIP settings (FUN_00d0c2c0; names from getter FUN_00cb9dc0). s2 is RemoteHost (an IP in
             # the samples); s1 / s3 are RemoteSipId / LocalSipId, order not yet confirmed.
             bb = bytes.fromhex(s['b'])
-            s['remote_host'], s['audio_codec'] = s['s2'], s['u32']
-            s['receive_buffer_size'], s['audio_packet_size'] = bb[0], bb[1]
+            s['remote_host'], s['audio_codec'] = s['s2'], VOIP_CODECS.get(s['u32'], 'value %d' % s['u32'])
+            s['receive_buffer_size'], s['audio_packet_size'] = _ms(VOIP_RX_BUFFER_MS, bb[0]), _ms(VOIP_PACKET_MS, bb[1])
             s['voice_act_detection'], s['dscp'] = bb[2] == 1, bb[3]
             o['port_d0c2c0'] = s
         sub = 0
@@ -1352,6 +1352,35 @@ def net_port_settings(net):
         out['Key Bank %d name' % (i + 1)] = name
         out['Key Bank %d color' % (i + 1)] = colour
     return out
+
+
+# VoIP codec ids (RTP-style numbers) -> Director's names (FUN_00d0d010); packet size / receive buffer codes
+# -> ms (FUN_00dc95d0 / FUN_00dc9770).
+VOIP_CODECS = {0: 'G.711 U-law 8k', 8: 'G.711 A-law 8k', 9: 'G.722 64kbps PLC', 84: 'G.711 U-law 16 k',
+               91: 'G.711 A-law 16k', 97: 'PCM 8k', 110: 'RARe U-law', 111: 'RARe A-law', 112: 'G.722 48kbps PLC'}
+VOIP_PACKET_MS = [20, 40, 80, 160, 320, 640]
+VOIP_RX_BUFFER_MS = [80, 160, 320, 640, 1280, 2560, 5120]
+
+
+def _ms(table, i):
+    return '%d ms' % table[i] if 0 <= i < len(table) else 'value %d' % i
+
+
+def net_voip_defaults(net):
+    """System 'VoIP Defaults' page (dialog 562; init FUN_00b9b970, store FUN_00b9b5d0)."""
+    strs = (net.get('net_strings2') or ['', '', ''])     # stored order: +0x74c, +0x750, +0x738
+    return {
+        'Audio codec': VOIP_CODECS.get(net.get('net_73c', 9), 'value %d' % net.get('net_73c', 9)),
+        'Audio packet size': _ms(VOIP_PACKET_MS, net.get('net_740', 0)),
+        'Receive buffer size': _ms(VOIP_RX_BUFFER_MS, net.get('net_744', 0)),
+        'Differentiated services code point (DSCP)': net.get('net_748', 0),
+        'Voice activity detection (VAD)': bool(net.get('net_749', 0)),
+        'SIP transport protocol': 'UDP' if net.get('net_754', 1) else 'TCP',
+        'VoIP Connection Port: Enable auto-answer': bool(net.get('net_758', 0)),
+        'Domain server (SIP PBX)': strs[0],
+        'Proxy server': strs[1],
+        'STUN Server Address': strs[2],
+    }
 
 
 def room_code_label(code):
