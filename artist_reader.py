@@ -858,8 +858,13 @@ def read_net(ar, o):
         b['4b8'] = ar.u8()
     if v >= 0x2f0:
         o['net_72c'], o['net_730'], o['net_734'] = ar.u8(), ar.u8(), ar.u8()
+        # Dialog 703 Monitor Defaults (0=switchable, 1=always on, 2=always off)
+        o['monitor_keystate'] = MONITORING_NAMES[o['net_72c']] if o['net_72c'] < len(MONITORING_NAMES) else o['net_72c']
+        o['monitor_call_to_port'] = MONITORING_NAMES[o['net_730']] if o['net_730'] < len(MONITORING_NAMES) else o['net_730']
+        o['monitor_call_to_ifb'] = 'initial on' if o['net_734'] == 1 else 'initial off'
     elif v >= 0x210:
         o['net_72c'] = ar.u8()
+        o['monitor_keystate'] = MONITORING_NAMES[o['net_72c']] if o['net_72c'] < len(MONITORING_NAMES) else o['net_72c']
     if v > 0x2f:
         o['net_strings'] = [ar.string() for _ in range(4)]
     if v >= 0x3c:
@@ -910,7 +915,7 @@ def read_net(ar, o):
         o['net_758'] = ar.u8() != 0
     if v > 0x55f:
         o['net_7a0'] = list(ar._take(0x13))
-        o['net_7ec'] = ar.u8() != 0
+        o['define_colors_automatically'] = o['net_7ec'] = ar.u8() != 0   # Dialog 729 CheckBox 1879
 
 
 # Frame type (+0x4f8) -> Director's name (FUN_009de1c0). Confirmed: 3/4/5/6/7/9 in the sample files.
@@ -1537,10 +1542,23 @@ def net_general(net):
         'AES67: Bit Depth': 'L%d' % net.get('net_76c', 24),
         'AES67: Packet Time': '%.3f ms' % (net.get('net_76e', 1000) / 1000.0),
         'AES67: Default Connection Method': _pick(['Manual', 'RTSP', 'NMOS'], net.get('net_770', 0)),
+        'Monitor Keystate': net.get('monitor_keystate', 'always on'),
+        'Monitor Call to Port': net.get('monitor_call_to_port', 'switchable'),
+        'Monitor Call to IFB': net.get('monitor_call_to_ifb', 'initial off'),
+        'Define colors automatically': net.get('define_colors_automatically', False),
     }
     for name, c in zip(FUNCTION_COLOR_ORDER, net.get('net_7a0') or []):
         out['Function color: ' + name] = 'none' if c == 16 else c
     return out
+
+
+def net_monitor_defaults(net):
+    """Monitor Defaults page (Dialog 703): keystate, call to port, call to IFB."""
+    return {
+        'Monitor Keystate': net.get('monitor_keystate', 'always on'),
+        'Monitor Call to Port': net.get('monitor_call_to_port', 'switchable'),
+        'Monitor Call to IFB': net.get('monitor_call_to_ifb', 'initial off'),
+    }
 
 
 def room_code_label(code):
@@ -2060,9 +2078,17 @@ def read_group_conf_shortlist(ar, o):
 def read_scheduler_task(ar, o):
     """CPhysSchedulerTask (0x5a) FUN_00cc4d30."""
     o['name'] = ar.string()
-    o['schedule'] = list(ar._take(7))                    # +0x88..0x8e (days / time fields)
-    o['task_u16'] = ar.u16()
-    o['event'] = ar.i32()
+    sched = list(ar._take(7))                    # +0x88..0x8e: SYSTEMTIME time/calendar fields
+    o['schedule'] = sched
+    o['second'] = sched[0]
+    o['minute'] = sched[1]
+    o['hour'] = sched[2]
+    o['day_of_week'] = sched[3]                  # 0..6 (0=Sunday), 0xff=any
+    o['month_recurrence'] = sched[4]             # recurrence mask (0xff=any)
+    o['month'] = sched[5]                        # 1..12
+    o['day'] = sched[6]                          # 1..31
+    o['year'] = o['task_u16'] = ar.u16()         # +0x90
+    o['event_id'] = o['event'] = ar.i32()        # +0x94: CPhysEvent object id
 
 
 EVENT_ACTIONS = {1: 'mcr_conference', 2: 'call_to_conference', 3: 'port_to_port', 4: 'logic_source',
@@ -2073,25 +2099,39 @@ def read_event_action(ar):
     """FUN_00c5f7a0 factory + CEvAct*::Serialize (vtable +0x28)."""
     v, t = ar.version, ar.u8()
     a = {'type': EVENT_ACTIONS.get(t, t)}
-    if t == 1:                                           # CEvActMcrConf FUN_00c625a0
+    if t == 1:                                           # CEvActMcrConf FUN_00c625a0 (Dialog 422)
         a['conference'] = ar.u32()
         a['members'] = u32_list(ar)
-    elif t == 2:                                         # CEvActCmdConf FUN_00c63fb0
+    elif t == 2:                                         # CEvActCmdConf FUN_00c63fb0 (Dialog 424)
         a['conference'], a['flags'], a['port'] = ar.u32(), ar.u8(), ar.u32()
-    elif t == 3:                                         # CEvActPortToPort FUN_00c61bc0
+        a['talk_privilege'] = bool(a['flags'] & 1)
+        a['listen_privilege'] = bool(a['flags'] & 2)
+        a['second_audio_channel'] = bool(a['flags'] & 4)
+    elif t == 3:                                         # CEvActPortToPort FUN_00c61bc0 (Dialog 426)
         a['flags'], a['source'], a['dest'] = ar.u8(), ar.u32(), ar.u32()
+        a['source_second_audio_channel'] = bool(a['flags'] & 1)
+        a['dest_second_audio_channel'] = bool(a['flags'] & 2)
         if v > 0x2f:
             a['label_a'], a['label_b'] = old_string(ar), old_string(ar)
-    elif t == 4:                                         # CEvActCmdLogicSrc FUN_00c633b0
+    elif t == 4:                                         # CEvActCmdLogicSrc FUN_00c633b0 (Dialog 427)
         a['logic_source'], a['port'] = ar.u32(), ar.u32()
-    elif t == 5:                                         # CEvActCmdGroup FUN_00c63900
+    elif t == 5:                                         # CEvActCmdGroup FUN_00c63900 (Dialog 457)
         a['group'], a['flag'], a['port'] = ar.u32(), ar.u8(), ar.u32()
-    elif t in (6, 7):                                    # CEvActCallToPort / ListenToPort
+        a['second_audio_channel'] = bool(a['flag'] & 1)
+    elif t in (6, 7):                                    # CEvActCallToPort (Dialog 458) / ListenToPort (Dialog 459)
         a['flags'], a['source'], a['dest'] = ar.u8(), ar.u32(), ar.u32()
-        if t == 6 and v > 0x42:
-            a['label'] = ar.string()
-        elif v > 0x2f:
-            a['label'] = old_string(ar)
+        if t == 6:
+            a['dest_second_audio_channel'] = bool(a['flags'] & 1)
+            a['source_second_audio_channel'] = bool(a['flags'] & 2)
+            if v > 0x42:
+                a['label'] = ar.string()
+            elif v > 0x2f:
+                a['label'] = old_string(ar)
+        else: # t == 7
+            a['source_second_audio_channel'] = bool(a['flags'] & 1)
+            a['dest_second_audio_channel'] = bool(a['flags'] & 2)
+            if v > 0x2f:
+                a['label'] = old_string(ar)
     else:
         raise ArtFormatError('unknown event action type %d at 0x%x' % (t, ar.p - 1))
     return a
