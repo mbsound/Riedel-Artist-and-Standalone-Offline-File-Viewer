@@ -955,9 +955,11 @@ def read_node(ar, o):
         ar.u32(); ar.u32()
         o['node_a0'], o['node_a4'], o['node_a8'] = ar.i32(), ar.i32(), ar.i32()
     o['node_list'] = [ar.u32() for _ in range(ar.i32())]   # +0xf4
-    o['node_500'] = ar.u8()
-    o['node_88'], o['node_8c'] = ar.i32(), ar.i32()
-    o['node_4fc'], o['node_4fe'] = ar.u16(), ar.u16()
+    o['node_address'] = o['node_500'] = ar.u8()          # +0x500: Property 2 'NodeAddress' (1-based frame number)
+    o['node_id'] = o['node_88'] = ar.i32()               # +0x88: node_id = 0x100 + node_address
+    o['node_8c'] = ar.i32()
+    o['soa'] = o['node_4fc'] = ar.u16()                  # +0x4fc: Property 3 'Soa' (Start of Allocation, ring port offset)
+    o['noa'] = o['node_4fe'] = ar.u16()                  # +0x4fe: Property 4 'Noa' (Number of Allocations, frame port count)
     ar.u32(); ar.u16(); ar.u32(); ar.u32()               # written as zeros
     o['node_90'] = ar.i32()
     o['node_type'] = ar.i32() if v >= 0x24 else 0      # +0x4f8, see NODE_TYPE_NAMES
