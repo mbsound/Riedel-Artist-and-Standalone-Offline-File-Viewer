@@ -285,6 +285,7 @@ def read_card_voip(ar, o):
     dhcp = ar.u8() if v >= 0x37 else 0
     if not dhcp:
         o['ip'], o['mask'], o['gateway'], o['voip_u32'] = ar.u32(), ar.u32(), ar.u32(), ar.u32()
+        # voip_u32: reserved; the loader discards it and the writer always writes 0
     o['voip_dhcp'] = bool(dhcp)                          # ObtainIpAddrAutomatic
     if v > 0x36:
         f2 = ar.u8()
@@ -928,6 +929,21 @@ def read_net(ar, o):
 NODE_TYPE_NAMES = {0: 'Artist M', 1: 'Artist S', 2: 'Artist 1D', 3: 'Artist 32', 4: 'Artist 64', 5: 'Artist 128',
                    6: 'Performer 32-16', 7: 'Performer 32-80', 9: 'Artist 1024'}
 
+# Node alarm masks (+0xa8 error, +0xa0 relay 1, +0xa4 relay 2): bit -> alarm, from the "Error mask" /
+# "Relay 1 mask" / "Relay 2 mask" dialogs (init FUN_00b9e360, DDX FUN_00b9e680). Default 0x2d7fffff;
+# switching the frame to Artist S masks with 0x8060001f (FUN_00ca6510). Bits 23 and 30 are unused.
+NODE_ALARM_BITS = dict([(i, 'Client Card Bay %d' % (i + 1)) for i in range(16)] + [
+    (16, 'Client Card Bay X'), (17, 'Client Card Bay Y'), (18, 'Power Supply 1'), (19, 'Power Supply 2'),
+    (20, 'Redundant Controller'), (21, 'Fiber Upstream'), (22, 'Fiber Downstream'), (24, 'Client Card Bay B'),
+    (25, 'Fiber transmission error'), (26, 'Configuration parse error'), (27, 'Hardware mismatch'),
+    (28, 'Eeprom writable'), (29, 'Error during bootup'), (31, 'bit 31 (not shown on the page)')])
+
+
+def node_alarms(mask):
+    """Names of the alarms checked in a node alarm mask."""
+    return [n for b, n in sorted(NODE_ALARM_BITS.items()) if mask >> b & 1]
+
+
 # Power supplies are all CPhysPowerSupply; Director names them from the frame type (confirmed for Performer).
 PSU_NAMES = {3: 'PSU-32 G2', 4: 'PSU-64 G2', 5: 'PSU-128 G2', 6: 'PSU-32+16', 7: 'PSU-32+80', 9: 'PSU-1024'}
 # Card model names on Performer frames (confirmed 2026-09-26 on Performer 32-16 / 32-80).
@@ -984,14 +1000,21 @@ def read_node(ar, o):
     if v > 0x1d:
         ar.u32(); ar.u32()
         o['node_a0'], o['node_a4'], o['node_a8'] = ar.i32(), ar.i32(), ar.i32()
+        # alarm masks, see NODE_ALARM_BITS: +0xa0 Relay 1, +0xa4 Relay 2, +0xa8 Error mask
+        o['relay1_mask'], o['relay2_mask'], o['error_mask'] = (o['node_a0'] & 0xffffffff,
+                                                                 o['node_a4'] & 0xffffffff, o['node_a8'] & 0xffffffff)
+        o['relay1_alarms'] = node_alarms(o['relay1_mask'])
+        o['relay2_alarms'] = node_alarms(o['relay2_mask'])
+        o['error_alarms'] = node_alarms(o['error_mask'])
     o['node_list'] = [ar.u32() for _ in range(ar.i32())]   # +0xf4
     o['node_address'] = o['node_500'] = ar.u8()          # +0x500: Property 2 'NodeAddress' (1-based frame number)
     o['node_id'] = o['node_88'] = ar.i32()               # +0x88: node_id = 0x100 + node_address
-    o['node_8c'] = ar.i32()
+    o['node_8c'] = ar.i32()                              # +0x8c: Serial Number (8-digit hex; setter FUN_00ca5040
+    o['serial_number'] = '%08X' % (o['node_8c'] & 0xffffffff) if o['node_8c'] else ''   #   rejects one used by another node), 0 = not set
     o['soa'] = o['node_4fc'] = ar.u16()                  # +0x4fc: Property 3 'Soa' (Start of Allocation, ring port offset)
     o['noa'] = o['node_4fe'] = ar.u16()                  # +0x4fe: Property 4 'Noa' (Number of Allocations, frame port count)
     ar.u32(); ar.u16(); ar.u32(); ar.u32()               # written as zeros
-    o['node_90'] = ar.i32()
+    o['node_90'] = ar.i32()                              # +0x90: reserved; setter FUN_00ca5140 has no caller in 8.9, init 0
     o['node_type'] = ar.i32() if v >= 0x24 else 0      # +0x4f8, see NODE_TYPE_NAMES
     if v > 0x2f:
         o['name'] = ar.string()

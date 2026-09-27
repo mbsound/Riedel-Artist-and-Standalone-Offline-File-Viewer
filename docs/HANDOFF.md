@@ -168,13 +168,19 @@ To maximize throughput and prevent file conflicts, work on Artist is strictly pa
 ## 7. Track A: still unnamed (after Claude's 2026-09-27 pass)
 
 These fields have no named alias yet. Everything else carries a Director name.
-- **Node:** `node_8c`, `node_90`, `node_a0`, `node_a4`, `node_a8` (bit mask `0x2d7fffff` on every node).
-- **GPIO:** `gpio_u8` (in and out), `gpio_128` (out).
-- **User:** `user_u16`.
-- **VoIP card:** `voip_u32` (the u32 after gateway).
 - **SIC AES67:** `aes67_16`, `aes67_bytes`, `aes67_u8`, `aes67_list_a/b`. Panel AES67: `aes67_bytes`, `aes67_u8`.
 - **System:** `net_colour` (3 bytes after the 0xff marker), `net_i32` (network-drawing floats, low value).
-- **Commands:** `cmd_ref` / `cmd_bit4` on the command base.
+- **Commands:** `cmd_ref` / `cmd_bit4` on the command base (0 on every command in all sample files).
+
+Resolved on 2026-09-28:
+- **Node `+0x8c`** is the Serial Number (`serial_number`, 8-digit hex, blank when 0). Setter `FUN_00ca5040`; the node dialog `FUN_00b9f990` rejects a serial already used by another node.
+- **Node `+0xa0` / `+0xa4` / `+0xa8`** are the alarm masks. Relay 1 is `relay1_mask` / `relay1_alarms`, Relay 2 is `relay2_mask` / `relay2_alarms`, and the Error mask is `error_mask` / `error_alarms`.
+  - The bit names are in `NODE_ALARM_BITS`, taken from the "Error mask" page (init `FUN_00b9e360`, DDX `FUN_00b9e680`, dialog 260).
+  - The default is `0x2d7fffff`. Converting a frame to Artist S masks it with `0x8060001f`.
+  - Suggested Excel columns for the Nodes sheet: Serial Number, Error Alarms, Relay 1 Alarms, Relay 2 Alarms.
+- **Node `+0x90`:** reserved. Its setter `FUN_00ca5140` has no caller in 8.9, and it initialises to 0.
+- **GPIO** `gpio_u8` / `gpio_128`: already aliased as `channel_selection` / `off_delay`. **User** `user_u16`: already aliased as `user_manager`.
+- **VoIP card** `voip_u32`: reserved. The loader `FUN_00c28870` discards it and the writer always writes 0.
 
 Suggested method:
 - Find the object's dialog in `docs/director_ddx.txt`.
