@@ -1260,6 +1260,26 @@ def panel_settings(p):
     }
 
 
+def net_panel_defaults(net):
+    """System-wide panel defaults (CPhysNet), in Director's wording. Fields come from the system
+    Port Defaults 1/2 pages (FUN_00b971b0 / FUN_00b96e10, FUN_00b983b0 / FUN_00b97dd0); they use the
+    same option lists as the per-port pages (see panel_settings)."""
+    b = net['net_bytes']
+    p = {'class': 0, 'min_speaker_vol': b['49f'], 'min_headset_vol': b['49e'], 'beep_vol': b['4a0'],
+         'beep_on_call_ms': net.get('net_4ae', 0), 'speaker_dim': b['4a8'], 'init_single_vol': b['4a9'],
+         'init_ifb_vol': b['4aa'], 'init_conf_vol': b['4ab'], 'fn_key_assignment': b['4a4'],
+         'vox_on': b['4b4'], 'vox_off': b['4b5'], 'vox_hold': b['4b3'],
+         'headset_mode_lock': net.get('net_4d4', 1), 'keybank_lock': net.get('net_4d8', 1),
+         'key_brightness': b['4ac'], 'led_brightness': b['4ad'], 'port_flags': 0x2000,
+         'response_timeout_ms': net.get('net_6fe', 0)}
+    d = panel_settings(p)
+    d['Fn key assignment'] = _FN_KEYS_F1F2.get(b['4a4'], 'value %d' % b['4a4'])   # system page offers F1/F2 list
+    del d['Rotary mute function']
+    d['Response Timeout Telephone Codec'] = '%d ms' % net.get('net_700', 0)
+    d['Response Timeout VoIP Ports'] = '%d ms' % net.get('net_702', 0)
+    return d
+
+
 def room_code_label(code):
     """Stored room code -> Director's value: 0 = <not assigned>, 1-26 = A-Z, 27-254 = 1-228 (confirmed)."""
     if not code:
