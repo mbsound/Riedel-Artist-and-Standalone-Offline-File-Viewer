@@ -87,7 +87,7 @@ Pitfalls:
 
 ## 5. Still to do (roughly by value)
 
-1. **Excel output.** Not started. Every decoder helper above returns Director-worded dicts ready for sheets. Treat the password and PIN as sensitive.
+1. **Excel output.** Not started. Every decoder helper above returns Director-worded dicts ready for sheets. Show the panel PIN, Live View password and SIP credentials as plain values: per the user, they are courtesy lock-outs (usually 0000 or 1234), not security data.
 2. **Remaining unnamed fields:**
    - IFB `ifb_flag_a`/`b`. The candidate is IsTrunkEnabled; the IFB property setter is in `%LOCALAPPDATA%\ghidra_projects\ifbp\00c71590.c`/`00c71d40.c`.
    - Also unnamed: GPIO `gpio_u8`/`gpio_128`, user `user_u16`/`rights` bits, logic `inputs_a/b`/`line_u8a/b`, IFB container `container_u8/u32`, NSA `nsa_u8`, codec `codec_u8`/`codec_str`.
