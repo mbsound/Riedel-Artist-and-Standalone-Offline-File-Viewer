@@ -1,4 +1,4 @@
-﻿"""
+"""
 Sequential reader for Riedel Director `.Art` configuration files, transcribed from Director 8.9.D2's
 own load code (see docs/FORMAT_NOTES.md Â§5). Unlike the pattern-matching parser in riedel_formats.py,
 this reads the file exactly the way Director does: header, object directory, then every object's
@@ -196,6 +196,7 @@ def read_base(ar, o):
     o['owner_user'] = ar.u32()            # CPhysUser id (the "system id" of the old notes)
     o['base_58'] = ar.u32()               # object id looked up via FUN_0078e4f0, 0 = none
     n = ar.u32() if ar.version < 0x25 else ar.u8()
+    # (user_id, rights_byte): bit 0 = Edit (1), bit 1 = Create children (2), bit 2 = Delete children (4); mask 7 = all
     o['user_rights'] = [(ar.u32(), ar.u8()) for _ in range(max(n, 0))]
 
 
@@ -275,17 +276,22 @@ def read_card_voip(ar, o):
     dhcp = ar.u8() if v >= 0x37 else 0
     if not dhcp:
         o['ip'], o['mask'], o['gateway'], o['voip_u32'] = ar.u32(), ar.u32(), ar.u32(), ar.u32()
-    o['voip_dhcp'] = bool(dhcp)
+    o['voip_dhcp'] = bool(dhcp)                          # ObtainIpAddrAutomatic
     if v > 0x36:
         f2 = ar.u8()
         if not f2:
-            o['voip_b1'], o['voip_b2'] = ar.u32(), ar.u32()
-        o['voip_flag2'] = bool(f2)
-        o['voip_u16'] = ar.u16()
-        o['voip_name'] = ar.string()
-        o['voip_u8'] = ar.u8()
+            o['primary_dns'], o['secondary_dns'] = ar.u32(), ar.u32()
+            o['voip_b1'], o['voip_b2'] = o['primary_dns'], o['secondary_dns'] # PrimaryDnsServer, SecondaryDnsServer
+        o['voip_flag2'] = bool(f2)                       # ObtainDnsAddrAutomatic
+        o['tcp_udp_port'] = ar.u16()                     # +0x3d0: TcpUdpPort
+        o['voip_u16'] = o['tcp_udp_port']
+        o['dns_hostname'] = ar.string()                  # +0x3ac: DnsHostName
+        o['voip_name'] = o['dns_hostname']
+        o['dscp'] = ar.u8()                              # +0x3d2: ServiceCodePoint (DSCP / DiffServ)
+        o['voip_u8'] = o['dscp']
     if v > 0x38:
-        o['voip_u8b'] = ar.u8()
+        o['link_mode'] = ar.u8()                         # +0x3d3: EthernetLinkMode
+        o['voip_u8b'] = o['link_mode']
 
 
 def read_sic_base(ar, o):
@@ -1580,20 +1586,33 @@ def read_sip_phone(ar, o):
 
 def read_codec_conn(ar, o):
     """CPhysCodecConnection (0x508) FUN_00a34540."""
-    o['voip_device'] = ar.u32()                          # CPhysConnectVoipDevice id
-    o['codec_u8'] = ar.u8()
-    o['codec_flags'] = ar.u8()
+    o['voip_device'] = ar.u32()                          # CPhysConnectVoipDevice id (DeviceSelection)
+    o['channel_selection'] = ar.u8()                     # ChannelSelection (0-based)
+    o['codec_u8'] = o['channel_selection']               # backward-compat alias
+    flags = ar.u8()
+    o['auto_answer'] = bool(flags & 1)                   # bit 0: AutoAnswer
+    o['auto_dial_enabled'] = bool((flags >> 1) & 1)      # bit 1: IsAutoDialEnabled
+    o['codec_flags'] = flags                             # backward-compat alias
     if ar.version > 0x53f:
-        o['codec_str'] = ar.string()
+        o['auto_dial_number'] = ar.string()              # AutoDialNumber
+        o['codec_str'] = o['auto_dial_number']           # backward-compat alias
     read_port(ar, o)
 
 
 def read_nsa_conn(ar, o):
     """CPhysNsaConnectionIn/Out/Connection (0x513-0x515): NSA device ref + byte(s) + port record."""
-    o['nsa_device'] = ar.i32()
-    o['nsa_u8'] = ar.u8()
-    if o['class'] == 0x515:
-        o['nsa_u8b'] = ar.u8()
+    o['nsa_device'] = ar.i32()                           # CPhysNsaDevice id (DeviceSelection)
+    if o['class'] == 0x513:                              # CPhysNsaConnectionIn
+        o['input_channel'] = ar.u8()
+        o['nsa_u8'] = o['input_channel']
+    elif o['class'] == 0x514:                            # CPhysNsaConnectionOut
+        o['output_channel'] = ar.u8()
+        o['nsa_u8'] = o['output_channel']
+    else:                                                # 0x515 CPhysNsaConnection (bidirectional)
+        o['input_channel'] = ar.u8()
+        o['output_channel'] = ar.u8()
+        o['nsa_u8'] = o['input_channel']
+        o['nsa_u8b'] = o['output_channel']
     read_port(ar, o)
 
 
@@ -1610,7 +1629,8 @@ def read_gpio_source(ar, o):
     if ar.version > 0x54f:
         o['device'] = ar.i32()                           # FUN_007d8600 source (+0x4a8)
         o['nsa_device'] = ar.i32()
-        o['gpio_u8'] = ar.u8()
+        o['channel_selection'] = ar.u8()                 # +0x11c: ChannelSelection (property index 5 on CPhysGpio)
+        o['gpio_u8'] = o['channel_selection']            # backward-compat alias
     if ar.version > 0x2f:
         o['name'] = ar.string()
 
@@ -1639,7 +1659,9 @@ def read_gpio_out(ar, o):
     # +0x110 confirmed 2026-09-25: 1 = Normally Closed, 0 = Normally Open. +0x120 = 0-based index on the card.
     nc, o['gpio_index'] = ar.i32(), ar.i32()
     o['normally_closed'] = bool(nc)
-    o['gpio_128'] = ar.u8() if v < 0x550 else ar.u32()
+    # +0x128: OffDelay in ms (multiples of 100ms, max 10000ms; property index 8)
+    o['off_delay'] = ar.u8() if v < 0x550 else ar.u32()
+    o['gpio_128'] = o['off_delay']                       # backward-compat alias
     o['users'] = u32_list(ar) if v < 0x25 else [ar.u32() for _ in range(ar.u16())]
     if v < 0x2b:
         raise ArtFormatError('GPIO out before 0x2b not implemented')
@@ -1856,16 +1878,40 @@ def read_audiopatch(ar, o):
         o['name'] = ar.string()
 
 
+USER_RIGHT_BITS = {
+    0: 'enable_partial_files',       # Enable Partial Files
+    1: 'cfg_overwrite',              # Allow Save to Artist (overwrite)
+    2: 'cfg_save_to_disk',           # Allow Save Configuration to Disk
+    3: 'cfg_open_from_disk',         # Allow Open File from Disk
+    4: 'pf_save_to_disk',            # Allow Save Partial File to Disk
+    5: 'restrict_av_router',         # Restrict Properties for AV-Router
+    6: 'pf_update',                  # Allow Update
+    7: 'pf_update_all',              # Allow Update All
+    8: 'pf_load_offline',            # Allow Load Offline
+    9: 'pf_load_all_offline',        # Allow Load All Offline
+    10: 'pf_cfg',                    # Allow PF Configuration
+    11: 'cfg_merge',                 # Allow Save Changes to Artist (merge)
+    14: 'scheduler_manager',         # Scheduler Manager
+    15: 'system_resets',             # Allow System Resets
+    16: 'ifb_manager',               # Interupted Fold Back Manager
+    17: 'allow_pin_pwd_change',      # Allow password changing for Live State/Remote Control & Panel menu PIN
+}
+
+
 def read_user(ar, o):
     """CPhysUser (0x23) FUN_00ccd0e0."""
     v = ar.version
     if v < 0x30:
         o['user_strings'] = [ar.wstring() for _ in range(4)]
-        o['user_u16'], o['rights'] = ar.u16(), ar.u16()
+        o['user_manager'], o['rights'] = bool(ar.u16()), ar.u16()
+        o['user_u16'] = 1 if o['user_manager'] else 0
+        o['permissions'] = [name for bit, name in USER_RIGHT_BITS.items() if (o['rights'] >> bit) & 1]
         return
     o['name'], o['full_name'], o['password'] = ar.string(), ar.string(), ar.string()
-    o['user_u16'] = ar.u16()
-    o['rights'] = ar.u16() if v < 0x3f else ar.u32()
+    o['user_manager'] = bool(ar.u16())                   # +0xa0: User Account Manager
+    o['user_u16'] = 1 if o['user_manager'] else 0        # backward-compat alias
+    o['rights'] = ar.u16() if v < 0x3f else ar.u32()     # +0x98: rights bitmask
+    o['permissions'] = [name for bit, name in USER_RIGHT_BITS.items() if (o['rights'] >> bit) & 1]
 
 
 # Confirmed on a Bolero (2026-09-24): 0 = Always, 1 = On VOX, 3 = On Call.
@@ -1907,9 +1953,11 @@ def read_logic_dst(ar, o):
     v = ar.version
     if v < 0x43:
         o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
-    o['rect'] = [ar.i32() for _ in range(4)]
-    o['inputs_a'] = [ar.u32() for _ in range(ar.u8())]
-    o['inputs_b'] = [ar.u32() for _ in range(ar.u8())]
+    o['rect'] = [ar.f32() for _ in range(4)]             # float rect (X1, Y1, X2, Y2)
+    o['active_inputs'] = [ar.u32() for _ in range(ar.u8())]     # elements triggering Active state
+    o['not_active_inputs'] = [ar.u32() for _ in range(ar.u8())] # elements triggering Not Active state
+    o['inputs_a'] = o['active_inputs']                   # backward-compat alias
+    o['inputs_b'] = o['not_active_inputs']               # backward-compat alias
     o['sources'] = [(ar.u32(), [ar.f32() for _ in range(4)]) for _ in range(ar.u8())]
     o['commands'] = [ar.u32() for _ in range(ar.i32())]
     if v > 0x2e:
@@ -1921,7 +1969,8 @@ def read_logic_dst(ar, o):
 
 def read_logic_line(ar, o):
     """CPhysLogicLine (0x42) FUN_00c870e0: a wire between logic elements."""
-    o['line_u8a'], o['line_u8b'] = ar.u8(), ar.u8()
+    o['from_pin'], o['to_pin'] = ar.u8(), ar.u8()        # source output pin, target input pin
+    o['line_u8a'], o['line_u8b'] = o['from_pin'], o['to_pin'] # backward-compat aliases
     o['from'], o['to'], o['dst'] = ar.u32(), ar.u32(), ar.u32()
     o['points'] = [(ar.i32(), ar.i32()) for _ in range(ar.u32())]
 
@@ -2050,15 +2099,19 @@ def read_ifb(ar, o):
     o['dim_level'] = 5 if d > 7 else d                   # +0x20 (Director clamps >7 to 5)
     o['dim_db'] = IFB_DIM_DB.get(o['dim_level'], 'unconfirmed (%d)' % o['dim_level'])
     f = ar.u8()
-    o['ifb_flag_a'], o['ifb_flag_b'] = f & 1, (f >> 1) & 1
+    o['ifb_flag_a'] = f & 1                              # +0x11 (boolean property index 8)
+    o['is_trunk_enabled'] = bool((f >> 1) & 1)           # +0x12: IsTrunkEnabled (property index 7)
+    o['ifb_flag_b'] = (f >> 1) & 1                       # backward-compat alias
     o['long_name'] = ar.string()                         # confirmed: IFB long name
 
 
 def read_ifb_container(ar, o):
     """CPhysIFBContainer (0x70) FUN_00c77d70: base trailer FIRST, then its own fields."""
     read_base(ar, o)
-    o['container_u8'] = ar.u8()
-    o['container_u32'] = ar.u32()
+    o['container_version'] = ar.u8()                      # +0x84: constant 2
+    o['container_index'] = ar.u32()                       # +0x88: 0-indexed (0..9) for "IFB-Container %u of 10"
+    o['container_u8'] = o['container_version']            # backward-compat alias
+    o['container_u32'] = o['container_index']             # backward-compat alias
 
 
 def read_phone_book(ar, o):
