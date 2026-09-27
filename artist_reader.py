@@ -1390,6 +1390,60 @@ FUNCTION_COLOR_ORDER = ['Call to Port', 'Call to Conference', 'Call to Group', '
                         'Send String']
 
 
+# Key marker names (CPhysNet key_markers entry i = marker i). From Director's static table 0xfee9c0
+# (123 entries: name, default display flags, default priority). 'a' = priority (lower wins), flags = display.
+MARKER_NAMES = [
+    'Default', 'Call to conference not activated', 'Call to conference activated',
+    'Call to conference incoming call panel', 'Call to conference incoming call 4-wire',
+    'Call to group not activated', 'Call to group activated', 'Call to port not activated',
+    'Call to port activated', 'Call to port incoming call', 'Listen to port not activated',
+    'Listen to port activated', 'Route Src to Dst not activated', 'Route Src to Dst activated',
+    'BEEP a port not activated', 'BEEP a port activated', 'Incoming BEEP', 'Audiopatch not activated',
+    'Audiopatch activated', 'Switch GPO not activated', 'Switch GPO  activated', 'User defined #17',
+    'Dim Speaker not activated', 'Dim Speaker activated', 'Dim Crosspoint not activated',
+    'Dim Crosspoint activated', 'Remote Key not activated', 'Remote Key activated', 'Logic Source not activated',
+    'Logic Source activated', 'Dial ISDN connection not activated', 'Dial ISDN connection activated',
+    'Edit Conference not activated', 'Edit Conference activated', 'Keypad not activated', 'Keypad activated',
+    'Kill Mic not activated', 'Kill Mic activated', 'Autolisten Off not activated', 'Autolisten Off activated',
+    'Clone XP not activated', 'Clone XP activated', 'Mute activated', 'Pool Panel offline', 'Show active dialing',
+    'In use', 'Busy', 'User defined # 0', 'User defined # 1', 'User defined # 2', 'User defined # 3',
+    'User defined # 4', 'User defined # 5', 'User defined # 6', 'User defined # 7', 'User defined # 8',
+    'User defined # 9', 'RRCS Active call', 'RRCS Listen off', 'RRCS Conference listen on, talk+listen',
+    'RRCS Conference listen on, talk', 'RRCS Conference listen on, listen', 'RRCS Listen on 4-wire',
+    'Member not recognized by EditConf', 'Member outside of the conference', 'Member inside the conference',
+    'Select item', 'Selected item', 'Confirmation for EditConf', 'Scroll menu first level',
+    'Scroll menu first level selectable', 'Scroll menu second level', 'Scroll menu second level selectable',
+    'Scroll menu third level', 'Scroll menu third level selectable', 'Not available / Error indication',
+    'Call to port with autolisten, outgoing', 'Call to port with autolisten, incoming',
+    'Set Input/Output Gain deactivated', 'Set Input/Output Gain activated',
+    'Input/Output Gain can be adjusted on this key', 'User defined #10', 'User defined #11', 'User defined #12',
+    'User defined #13', 'User defined #14', 'User defined #15', 'User defined #16',
+    'MCR conference/member/monitor port is selected', 'MCR conference/member is assigned',
+    'MCR conference is speaking', 'MCR update needed', 'MCR update in progress',
+    'MCR default marker for inactive keys', 'MCR conference/member is not assigned',
+    'MCR selected monitor port is muted', 'MCR monitor function is active / port is assigned',
+    'Send String not activated', 'Send String activated', 'Call to IFB not activated', 'Call to IFB activated',
+    'Call to IFB incoming call', 'Control Audiopatch', 'Call to port / IFB not activated, monitoring activated',
+    'Call to port / IFB activated, monitoring activated', 'Call to port / IFB incoming call, monitoring activated',
+    'Call to port incoming call and activated', 'Edit IFB, not activated', 'Edit IFB, activated',
+    'Edit IFB, IFB not selected', 'Edit IFB, IFB selected', 'Edit IFB, Mix Minus not selected',
+    'Edit IFB, Mix Minus selected', 'Edit IFB, IFB is not using the selected Mix Minus',
+    'Edit IFB, IFB is using the selected Mix Minus', 'Edit IFB, Mix Minus is not used by the selected IFB',
+    'Edit IFB, Mix Minus is used by the selected IFB', 'Edit IFB, IFB will not be used by the selected IFB',
+    'Edit IFB, IFB will be used by the selected IFB', 'Edit IFB, Mix Minus will not be used by the selected IFB',
+    'Edit IFB, Mix Minus will be used by the selected IFB', 'Hot Mic activated', 'Hot Mic deactivated']
+
+
+def net_markers(net):
+    """Key marker definitions (Marker definition dialog): [(marker name, priority, extra, display flags)]."""
+    out = []
+    for i, m in enumerate(net.get('key_markers') or []):
+        name = MARKER_NAMES[i] if i < len(MARKER_NAMES) else 'Marker %d' % i
+        out.append({'marker': name, 'priority': m['a'], 'extra': m['b'], 'display_flags': '%08x' % m['flags'],
+                    'user_name': m['name']})
+    return out
+
+
 def net_general(net):
     """System name, IFB table titles, net number, trunking and AES67 defaults, function colours (CPhysNet)."""
     strs = net.get('net_strings') or ['', '', '', '']
