@@ -503,12 +503,12 @@ def read_cmd_talk(ar, o):
         o['talk_old_u8'] = ar.u8()
     if v < 0x480 or not trunk:
         o['target'] = ar.u32()            # port object id (0 / 0xffffffff = none)
-        o['target_u16a'] = ar.u16()
-        o['target_u16b'] = ar.u16()
+        o['target_port_number'] = ar.u16()             # target port +0x288
+        o['target_port_number_2nd'] = ar.u16()         # 2nd-channel partner port number
     read_old_port_list(ar)
     o['key'] = ar.u32()                   # owning CPhysCmdContainer (key) id
     if v >= 0x29 and (v < 0x480 or trunk):
-        o['trunk_a'], o['trunk_b'] = ar.u32(), ar.u32()
+        o['trunk_net_address'], o['trunk_port_address'] = ar.u32(), ar.u32()   # TrunkingNetAddr / TrunkingPortAddr
         o['trunk_name'] = ar.string()
     if v >= 0x500:
         o['talk_str'] = ar.string()
@@ -529,11 +529,11 @@ def read_cmd_listen(ar, o):
         o['listen_old'] = ar._take(3).hex()
     if v < 0x480 or not trunk:
         o['target'] = ar.u32()
-        o['target_u16'] = ar.u16()
+        o['target_port_number'] = ar.u16()
     read_old_port_list(ar)
     o['key'] = ar.u32()
     if v >= 0x29 and (v < 0x480 or trunk):
-        o['trunk_a'], o['trunk_b'] = ar.u32(), ar.u32()
+        o['trunk_net_address'], o['trunk_port_address'] = ar.u32(), ar.u32()   # TrunkingNetAddr / TrunkingPortAddr
         o['trunk_name'] = ar.string()
     read_cmd_base(ar, o)
 
@@ -607,8 +607,8 @@ def read_cmd_route(ar, o):
     read_cmd_head(ar, o)
     if v < 0x480:
         o['route_old'] = ar._take(2).hex()
-    o['route_a'], o['route_a_u16'] = ar.u32(), ar.u16()
-    o['route_b'], o['route_b_u16'] = ar.u32(), ar.u16()
+    o['source'], o['source_port_number'] = ar.u32(), ar.u16()
+    o['destination'], o['destination_port_number'] = ar.u32(), ar.u16()
     read_old_port_list(ar)
     o['key'] = ar.u32()
     if 0x29 <= v < 0x480:
@@ -629,7 +629,7 @@ def read_cmd_beep(ar, o):
     """CPhysCmdBeep (0x35) FUN_00c2adf0."""
     o['cmd_word'] = ar.u32() if ar.version < 0x25 else ar.u16()
     o['target'] = ar.u32()
-    o['target_u16'] = ar.u16()
+    o['target_port_number'] = ar.u16()
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
@@ -1063,9 +1063,9 @@ def read_port(ar, o, pool_state=0):
     if v < 0x39:
         ar.skip(8)
     if v < 0x2e:
-        o['port_2cc'], n = ar.u32(), ar.u32()
+        o['port_index'], n = ar.u32(), ar.u32()
     else:
-        o['port_2cc'], n = ar.u8(), ar.u8()
+        o['port_index'], n = ar.u8(), ar.u8()          # position on the card (0 = first port)
     ar.skip(4 * n)
     # Panel settings (Port Defaults 1/2 pages): list positions, see PANEL_SETTINGS / panel_settings().
     o['min_headset_vol'], o['min_speaker_vol'], o['beep_vol'] = ar.u8(), ar.u8(), ar.u8()
@@ -1190,7 +1190,7 @@ def read_port(ar, o, pool_state=0):
     if v > 0x39f and cls in PANEL_23XX:
         o['panel_ui'] = read_panel_ui(ar, cls)
     if v > 0x51f:
-        o['port_354'] = ar.u8() & 1
+        o['limit_incoming_to_phone_book'] = ar.u8() & 1   # 'Phone Book: Limit incoming calls to Phone Book'
         o['phone_book'] = ar.u32()
     if v >= 0x380:
         o['port_338'] = ar.u16()
@@ -2132,7 +2132,7 @@ def read_cmd_u32_only(ar, o):
 def read_cmd_control_ap(ar, o):
     """CPhysCmdControlAudioPatch (0x31) FUN_00c36e80: key first, then port + value."""
     o['key'] = ar.u32()
-    o['target'], o['target_u16'] = ar.u32(), ar.u16()
+    o['target'], o['target_port_number'] = ar.u32(), ar.u16()
     o['ap_value'] = ar.i32()
     o['ap_flag'] = ar.u8() != 0
     read_cmd_base(ar, o)
@@ -2142,7 +2142,7 @@ def read_cmd_dim_speaker(ar, o):
     """CPhysCmdDimSpeaker (0x33) FUN_00c3ad00."""
     _cmd_word(ar, o)
     o['dim'] = ar.u8()
-    o['target'], o['target_u16'] = ar.u32(), ar.u16()
+    o['target'], o['target_port_number'] = ar.u32(), ar.u16()
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
@@ -2177,7 +2177,7 @@ def read_cmd_keypad(ar, o):
 def read_cmd_io_gain(ar, o):
     """CPhysCmdIOGain (0x4f) FUN_00c411f0: no key field (taken from the base trailer)."""
     o['gain_flags'] = ar.u8()
-    o['target'], o['target_u16'] = ar.u32(), ar.u16()
+    o['target'], o['target_port_number'] = ar.u32(), ar.u16()
     read_cmd_base(ar, o)
 
 
@@ -2198,7 +2198,7 @@ def read_cmd_send_string(ar, o):
 
 def read_cmd_hot_mic(ar, o):
     """CPhysCmdHotMic (0x6b) FUN_00c02850."""
-    o['target'], o['target_u16'] = ar.i32(), ar.u16()
+    o['target'], o['target_port_number'] = ar.i32(), ar.u16()
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
