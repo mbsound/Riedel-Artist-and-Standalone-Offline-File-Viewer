@@ -254,7 +254,16 @@ def read_card_classic(ar, o):
 def read_card_madi(ar, o):
     """CPhysClientMadi FUN_00c256f0."""
     read_client_panel(ar, o)
-    o['madi_bytes'] = ar._take(3).hex()
+    raw = ar._take(3)
+    o['madi_bytes'] = raw.hex()
+    b0, b1, b2 = raw[0], raw[1], raw[2]
+    # Dialog 411 / ComboBox 1011 & 1012: Bit 7 = Up Interface, Bit 6 = Down Interface
+    o['up_interface'] = 'Optical' if (b0 & 0x80) else 'Electrical'
+    o['down_interface'] = 'Optical' if (b0 & 0x40) else 'Electrical'
+    # Dialog 411 / ComboBox 1010: 56 or 64 channels
+    o['frame_length'] = b1 & 0x7f
+    # Dialog 411 / ComboBox 1021: 1-based 8-channel block (1 = '01 - 08', ..., 8 = '57 - 64')
+    o['channel_block'] = b2
 
 
 def read_card_dante(ar, o):
@@ -297,10 +306,10 @@ def read_card_voip(ar, o):
 def read_sic_base(ar, o):
     """CPhysClientUic/Sic FUN_00c01900: network card base."""
     read_client(ar, o)
-    o['sic_u8'] = ar.u8()
+    o['sub_bay'] = o['sic_u8'] = ar.u8()                 # +0x8c: 1-based sub-bay index
     o['name'] = ar.string()
-    o['sic_u16a'] = ar.u16()
-    o['sic_u16b'] = ar.u16()
+    o['start_port'] = o['sic_u16a'] = ar.u16()           # +0x8e: first allocated port index
+    o['allocated_ports'] = o['sic_u16b'] = ar.u16()       # +0x90: number of ports allocated (AllocatedPorts)
     if ar.version >= 0x3e0:
         o['sub_objects'] = u32_list(ar)   # e.g. CPhysClientSubSic ids
     if ar.version >= 0x500:
@@ -392,7 +401,15 @@ def read_card_sic_aes67(ar, o):
         o['aes67_list_a'] = [ar.u32() for _ in range(ar.u8())]
         o['aes67_list_b'] = [ar.u32() for _ in range(ar.u8())]
     if v >= 0x320:
-        o['interfaces'] = [(ar.u8(), ar.u8() if v >= 0x550 else None) for _ in range(3)]
+        raw_ifs = []
+        details = []
+        for _ in range(3):
+            ports = ar.u8()
+            gpios = ar.u8() if v >= 0x550 else None
+            raw_ifs.append((ports, gpios))
+            details.append({'assigned_ports': ports, 'assigned_gpios': gpios})
+        o['interfaces'] = raw_ifs
+        o['interface_details'] = details
     read_aes67_media(ar, o, owner_is_sic=True)
     if v >= 0x2f0:
         read_aes67_media(ar, o, owner_is_sic=True)      # secondary (redundant) network
@@ -406,17 +423,36 @@ def read_card_sic_aes67(ar, o):
 
 
 def read_card_sic_madi(ar, o):
-    """CPhysClientSicMadi FUN_00c00360: two MADI interfaces."""
+    """CPhysClientSicMadi FUN_00c00360: two MADI interfaces (Media 1, Media 2)."""
     read_sic_base(ar, o)
     ifs = []
+    details = []
     for _ in range(2):
-        i = [ar.u8(), ar.u8()]
+        ports = ar.u8()
+        frame_len = ar.u8()
+        sync_ext = ar.u8() if ar.version >= 0x310 else 0
+        smux = ar.u8() if ar.version >= 0x410 else 0
+        i = [ports, frame_len]
         if ar.version >= 0x310:
-            i.append(ar.u8())
+            i.append(sync_ext)
         if ar.version >= 0x410:
-            i.append(ar.u8())
+            i.append(smux)
         ifs.append(i)
+        if not sync_ext:
+            sync_mode = 'Internal Clock 48 kHz (Standard)'
+        elif smux:
+            sync_mode = 'External Signal 88,2/96 kHz S/MUX'
+        else:
+            sync_mode = 'External Signal 44,1/48/88,2/96 kHz native'
+        details.append({
+            'assigned_ports': ports,
+            'frame_length': frame_len,
+            'sync_external': bool(sync_ext),
+            'smux': bool(smux),
+            'sync_mode': sync_mode,
+        })
     o['madi_interfaces'] = ifs
+    o['interface_details'] = details
 
 
 def read_card_sic_dante(ar, o):
@@ -424,7 +460,7 @@ def read_card_sic_dante(ar, o):
     read_sic_base(ar, o)
     o['dante_name'] = ar.string()
     if ar.version >= 0x4d0:
-        o['dante_u8'] = ar.u8()
+        o['allocated_ports'] = o['dante_u8'] = ar.u8()
 
 
 # ----- key commands (CPhysCommand subclasses) -------------------------------------------------
