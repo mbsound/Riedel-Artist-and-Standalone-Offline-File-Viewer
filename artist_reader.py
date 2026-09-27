@@ -759,9 +759,9 @@ def read_net(ar, o):
         if v < 0x2b:
             skip_counted(ar)
         skip_counted(ar)
-    o['net_i32'] = [ar.i32() for _ in range(4)]          # +0x48c, +0x494, +0x490, +0x498
-    o['net_list_a'] = u32_list(ar)
-    o['net_list_b'] = u32_list(ar)
+    o['net_i32'] = [ar.i32() for _ in range(4)]          # +0x48c +0x494 +0x490 +0x498: network-drawing floats
+    o['net_list_a'] = u32_list(ar)                       # CPhysNode ids (the system's frames)
+    o['net_list_b'] = u32_list(ar)                       # CPhysLWL ids (fibre links)
     o['web'] = ar.i32()                                  # CPhysWeb id
     o['net_6fc'] = ar.u8()
     read_key_markers(ar, o)
@@ -901,7 +901,7 @@ def read_node(ar, o):
     o['node_format'] = ar.i32()                          # written as 0x580 by 8.9 (+0x4f4)
     if v < 0x43:
         o['name'] = ar._take(0x20).decode('cp1252', 'replace').rstrip('\0')
-    o['node_geom'] = [struct.unpack('<f', ar._take(4))[0] for _ in range(4)]   # +0x514 +0x51c +0x518 +0x520
+    o['node_geom'] = [struct.unpack('<f', ar._take(4))[0] for _ in range(4)]   # +0x514 +0x51c +0x518 +0x520: box on the network drawing
     o['slots'] = [ar.u32() for _ in range(18)]           # card object id per slot (+0xac)
     if v > 0x2f:
         o['slot_classes'] = [ar.u32() for _ in range(18)]   # the card's class code
@@ -1381,6 +1381,42 @@ def net_voip_defaults(net):
         'Proxy server': strs[1],
         'STUN Server Address': strs[2],
     }
+
+
+# Default key group colour per function (CPhysNet +0x7a0, 19 entries; FUN_00c23470 maps command class -> index).
+FUNCTION_COLOR_ORDER = ['Call to Port', 'Call to Conference', 'Call to Group', 'Call to IFB', 'Listen to Port',
+                        'Route Audio', 'GPIO', 'Select Audiopatch', 'Hot Mic', 'Control Audiopatch', 'Signal',
+                        'Reply', 'Dim Speaker', 'Dim Level', 'Beep', 'Clone Output Port', 'Logic', 'I/O Gain',
+                        'Send String']
+
+
+def net_general(net):
+    """System name, IFB table titles, net number, trunking and AES67 defaults, function colours (CPhysNet)."""
+    strs = net.get('net_strings') or ['', '', '', '']
+    ta = net.get('net_71c') or [0, 0, 0, 0]
+    out = {
+        'System name': strs[0],
+        'IFB table titles (Input / Mix Minus / Output)': ' / '.join(strs[1:4]),
+        'Net number': net.get('net_6fc'),
+        'Default Trunking Address: Port': ta[0], 'Default Trunking Address: Group': ta[1],
+        'Default Trunking Address: Conference': ta[2], 'Default Trunking Address: Trunkline': ta[3],
+        # AES67 Defaults page (dialog 676; store FUN_00b8bb90, init FUN_00b8bfb0)
+        'AES67: PTP Domain': net.get('net_759'),
+        'AES67: PTP Mode': _pick(['multicast', 'hybrid'], net.get('net_75a', 0)),
+        'AES67: DSCP': net.get('net_75b'),
+        'AES67: Payload Type': net.get('net_75c'),
+        'AES67: SSRC': net.get('net_760'),
+        'AES67: Time Stamp Offset': net.get('net_764'),
+        'AES67: SIP TCP/UDP port (ports, Artist-32/64/128)': net.get('net_768'),
+        'AES67: SIP TCP/UDP port (clients)': net.get('net_76a'),
+        'AES67: TCP port on Artist-1024': net.get('net_772'),
+        'AES67: Bit Depth': 'L%d' % net.get('net_76c', 24),
+        'AES67: Packet Time': '%.3f ms' % (net.get('net_76e', 1000) / 1000.0),
+        'AES67: Default Connection Method': _pick(['Manual', 'RTSP', 'NMOS'], net.get('net_770', 0)),
+    }
+    for name, c in zip(FUNCTION_COLOR_ORDER, net.get('net_7a0') or []):
+        out['Function color: ' + name] = 'none' if c == 16 else c
+    return out
 
 
 def room_code_label(code):
