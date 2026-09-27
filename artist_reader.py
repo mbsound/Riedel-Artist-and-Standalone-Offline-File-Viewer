@@ -1285,6 +1285,43 @@ def net_panel_defaults(net):
     return d
 
 
+# 'Action when muted key is pressed' (Key Defaults +0x4c0; per key +0x142 ActionByKeyPressed).
+MUTED_KEY_ACTIONS = ['No volume change on key activation/deactivation', 'Unmute on key activation',
+                     'Unmute on key activation and mute again on key deactivation']
+# Call to Port duplex default (+0x4ca): item data = the Talk flag bits.
+CALL_DUPLEX = {0: 'Standard call', 0x20: 'Duplex call', 1: 'Isolate', 2: 'Isolate self',
+               4: 'Autolisten from Destination'}
+
+
+def net_call_key_defaults(net):
+    """System 'Call Defaults' (dialog 208, FUN_00b8c920 / FUN_00b8c630) and 'Key Defaults' (dialog 207,
+    FUN_00b93ca0 / FUN_00b93b10) pages of CPhysNet."""
+    b = net['net_bytes']
+    pr = lambda v: PRIORITY_NAMES.get(v, 'value %d' % v)
+    onoff = lambda v: 'Enabled' if v else 'Disabled'
+    return {
+        'Call to Port: Call Prio': pr(b['4c3']),
+        'Call to Port: Duplex': CALL_DUPLEX.get(net.get('net_4ca', 0), 'value %d' % net.get('net_4ca', 0)),
+        'Reply: Call Prio': pr(b['4c7']),
+        'Reply: Calls from Conf': onoff(b.get('4ce', 0)),
+        'Reply: Duplex': 'Duplex call' if b.get('4cf') else 'Standard call',
+        'Reply: Enable Scroll function': onoff(b['4d0']),
+        'Call to Conference: Call Prio': pr(b['4c4']),
+        'Call to Conference: Talk privilege': bool(b.get('4cc', 0)),
+        'Call to Conference: Listen privilege': bool(b.get('4cd', 0)),
+        'Call to Group: Call Prio': pr(b['4c5']),
+        'Listen to Port: Call Prio': pr(b['4c6']),
+        'Route Audio: Call Prio': pr(b['4c8']),
+        # Key Defaults. Key Mode uses the key's internal values (1 Auto, 2 Momentary, 3 Latching) - to spot-check.
+        'Key Mode': {1: 'Auto', 2: 'Momentary', 3: 'Latching'}.get(b['4be'], 'value %d' % b['4be']),
+        'Latching Timeout': _pick(LATCHING_TIMEOUTS, b['4d1']),
+        'Activate Speaker Dim': bool(b['4bf']),
+        'Restore volume level': bool(b['4c1']),
+        'Restart Latching timer': bool(b['4c2']),
+        'Action when muted key is pressed': _pick(MUTED_KEY_ACTIONS, b['4c0']),
+    }
+
+
 def room_code_label(code):
     """Stored room code -> Director's value: 0 = <not assigned>, 1-26 = A-Z, 27-254 = 1-228 (confirmed)."""
     if not code:

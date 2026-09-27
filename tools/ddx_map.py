@@ -67,23 +67,31 @@ def labels_for(ctrls):
     """control id -> (type, label). Own text for checkbox / radio / button; otherwise the static text
     to the left on the same row, else the nearest static above."""
     statics = [(r, t.strip()) for cid, k, t, r in ctrls if k == 'Static' and t.strip()]
+    groups = [(r, t.strip().rstrip(':')) for cid, k, t, r in ctrls if k == 'GroupBox' and t.strip()]
+
+    def group_of(r):
+        x, y, w, h = r
+        # only the control's top-left must be inside: combo boxes report their drop-down height
+        inside = [(g[2] * g[3], t) for g, t in groups
+                  if g[0] <= x <= g[0] + g[2] and g[1] <= y <= g[1] + g[3]]
+        return min(inside)[1] + ': ' if inside else ''
     out = {}
     for cid, kind, text, r in ctrls:
         if kind in ('Static', 'GroupBox'):
             continue
         own = text.strip()
         if own and kind in ('CheckBox', 'Radio', 'Button'):
-            out.setdefault(cid, (kind, own))
+            out.setdefault(cid, (kind, group_of(r) + own))
             continue
         x, y, w, h = r
         cy = y + h / 2
         row = [(x - (sr[0] + sr[2]), t) for sr, t in statics
                if sr[1] - 2 <= cy <= sr[1] + sr[3] + 2 and sr[0] < x]
         if row:
-            out.setdefault(cid, (kind, min(row)[1]))
+            out.setdefault(cid, (kind, group_of(r) + min(row)[1]))
             continue
         above = [(y - sr[1], t) for sr, t in statics if sr[1] < y and abs(sr[0] - x) < 40]
-        out.setdefault(cid, (kind, min(above)[1] if above else ''))
+        out.setdefault(cid, (kind, group_of(r) + (min(above)[1] if above else '')))
     return out
 
 
