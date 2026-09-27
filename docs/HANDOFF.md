@@ -92,16 +92,28 @@ Pitfalls:
   - `net_general()`: system name, IFB titles, net number, default trunking addresses, AES67 Defaults, function colours (`FUNCTION_COLOR_ORDER`), and `define_colors_automatically` (Dialog 729).
   - `net_markers()` with `marker_display()`: 123 key markers from `MARKER_NAMES`, with priority, persistence timeout and 1000/2000/RIF display colours.
   - `net_list_a` = nodes, `net_list_b` = fibre links, `net_i32` = network-drawing floats.
-- **Scheduler & Events.**
-  - `read_scheduler_task()`: SYSTEMTIME calendar fields decoded 1:1 (`second`, `minute`, `hour`, `day_of_week`, `month_recurrence`, `month`, `day`, `year`, `event_id`).
-  - `read_event_action()`: all 7 action types decoded with bit flags (`talk_privilege`, `listen_privilege`, `second_audio_channel`, `source_second_audio_channel`, `dest_second_audio_channel`).
+- **Excel Exporter (`Code/art_to_excel.py`).**
+  - Generates a complete, beautiful 14-sheet workbook directly driven by `artist_reader.py` with zero heuristic guesswork or `NOT_DECODED` placeholders:
+    1. `Summary`: System metadata, release, schema, node/card/port/key/conference/group/IFB/patch counts.
+    2. `System Settings`: Complete CPhysNet settings (System Name, Net Number, Default Trunking Addresses, AES67 Defaults, Monitor Defaults Dialog 703, Color Defaults Dialog 729, Call & Key Defaults Dialog 207/208, Port Settings Dialog 209 with plain PIN/passwords, Key Markers).
+    3. `Nodes & Topology`: All frame mainframes with Node #, Node ID (`0x100 + address`), Chassis Model, Ring SOA, NOA, Controller A/B, PSU redundancy, and Optical Fibre Ring links (CPhysLWL).
+    4. `Cards & Slots`: Bay slots, sub-bay allocations, card models, start port, allocated ports, Media 1 & 2 IP configurations, MADI sync modes, Dante names, and VoIP DNS/hostname.
+    5. `Ports`: 1:1 replica of Director's Ports Grid (Port #, Label, Long Name, Alias, Subtitle, Port Type, Node-Bay, Architecture, Gains, Room Code/Mode, 2nd Channel, Shortcuts, Bolero multicast / SIP host / NSA channels).
+    6. `Panels & Keys`: Every key across all SmartPanels, Bolero beltpacks, and expansion modules (Key #, Label, Subtitle, Mode, Latching Timeout, Primary Command & Target, Priority, Secondary stacked command).
+    7. `Conferences`: All conferences (Partylines) with label, alias, long name, trunking, DynaConf, shortcut, and full resolved member ports list.
+    8. `Groups`: All directed talkgroups with label, long name, shortcut, trunk address, and full resolved member ports list.
+    9. `IFB Routing`: All IFB broadcast channels with IFB #, label, long name, dim level, trunking, and resolved Input, Mix-Minus, and Output endpoints.
+    10. `Audio Patch`: Mixing matrices and DSP element chains (unmuted crosspoints, muted output amps, bandpass high/low cut filters, limiter/compressor dynamics, input gains).
+    11. `Logic & GPIO`: Hardware GPI input channels, relay output channels, logic gates, and internal matrix logic lines.
+    12. `IP Trunks`: Dedicated sheet for inter-matrix IP trunklines, VoIP connections, and SIP accounts with host addresses and codecs.
+    13. `Users & Access`: All operator & administrator accounts with username, full name, role, rights mask, decoded permissions, and courtesy lock PIN/password.
+    14. `Scheduler`: Automated scheduler tasks with SYSTEMTIME calendar recurrence, times, and linked matrix events.
 
 ## 5. Still to do (roughly by value)
 
-1. **Excel output.** Generate clean multi-sheet workbook matching Director's layout and nomenclature. Every decoder helper returns Director-worded dicts ready for sheets. Show the panel PIN, Live View password and SIP credentials as plain values: per the user, they are courtesy lock-outs (usually 0000 or 1234), not security data.
-2. **Artist card variants.** Tell apart -108, -208 and G2 on Artist frames.
-3. **Colour index → name.** Director draws colours as swatches, with no names in the exe, so colours are left as numbers (16 = none).
-4. **`.bol` files.** Separate work: see the memory note on the Bolero firmware packages.
+1. **Artist card variants.** Tell apart -108, -208 and G2 on Artist frames.
+2. **Colour index → name.** Director draws colours as swatches, with no names in the exe, so colours are left as numbers (16 = none).
+3. **`.bol` files.** Separate work: see the memory note on the Bolero firmware packages.
 
 ## 6. Spot-check list (one batched test save in Director should settle these)
 
