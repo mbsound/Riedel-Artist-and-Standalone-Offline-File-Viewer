@@ -2496,11 +2496,14 @@ def read_zmxif(ar, o):
 def read_connect_voip_device(ar, o):
     """CPhysConnectVoipDevice (0x509) FUN_00a36df0 (untested: not in the sample files)."""
     ar.u8()
+    # page CConnectDeviceVoipPP (init FUN_00a1f330): IP settings, AES67 Input and AES67 Output addresses
     o['addresses'] = [(ar.i32(), ar.u16()) for _ in range(3)]
+    (o['ip_address'], o['ip_port']), (o['input_multicast_ip'], o['input_multicast_port']),         (o['output_multicast_ip'], o['output_multicast_port']) = o['addresses']
     o['codec_connections'] = [ar.u32() for _ in range(ar.u16())]
     if ar.version < 0x550:
         ar.skip(4)
-    o['voip_u8'] = ar.u8()
+    o['voip_u8'] = ar.u8()                               # 'Number of channels' combo (control 2128)
+    o['number_of_channels_index'] = o['voip_u8']
     o['name'] = ar.string()
 
 
