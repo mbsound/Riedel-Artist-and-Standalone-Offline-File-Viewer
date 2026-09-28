@@ -560,9 +560,10 @@ def read_cmd_base(ar, o):
         o['trunkcall_priority'] = PRIORITY_NAMES.get(o['cmd_mode'], 'value %d' % o['cmd_mode'])
         o['cmd_trunk_flag'] = f & 1       # vtable+0xec at save time
         if v > 0x39:
-            o['cmd_bit4'] = (f >> 4) & 1  # +0x94
+            o['cmd_bit4'] = (f >> 4) & 1  # +0x94: reserved; only load / save / init touch it in 8.9
         if v > 0x2c:
-            o['cmd_ref'] = ar.u32()       # FUN_0078e4f0 lookup, 0 = none
+            o['cmd_ref'] = ar.u32()       # +0x84: object that created this command, 0 = none
+            o['created_by'] = o['cmd_ref']   # shown as " (created by %s)" (FUN_00c57290)
     if v >= 0x43:
         o['cmd_name'] = ar.string()
     elif v > 0x2f:
@@ -855,6 +856,7 @@ def read_net(ar, o):
             skip_counted(ar)
         skip_counted(ar)
     o['net_i32'] = [ar.i32() for _ in range(4)]          # +0x48c +0x494 +0x490 +0x498: network-drawing floats
+    o['net_geom'] = [struct.unpack('<f', struct.pack('<i', x))[0] for x in o['net_i32']]   # as floats, like node_geom
     o['net_list_a'] = u32_list(ar)                       # CPhysNode ids (the system's frames)
     o['net_list_b'] = u32_list(ar)                       # CPhysLWL ids (fibre links)
     o['web'] = ar.i32()                                  # CPhysWeb id
@@ -905,6 +907,8 @@ def read_net(ar, o):
     if v >= 0x3d:
         if ar.u8() != 0xff:
             raise ArtFormatError('net colour marker at 0x%x' % (ar.p - 1))
+        # +0x4e4: 4-byte colour (FUN_00c9ce00: 0xff marker, then 3 bytes); constructors default it to 0xffffffff
+        # and its setter FUN_00c9dd10 has no caller in 8.9, so it is a legacy value
         o['net_colour'] = ar._take(3).hex()
     if v >= 0x44:
         b['4b8'] = ar.u8()

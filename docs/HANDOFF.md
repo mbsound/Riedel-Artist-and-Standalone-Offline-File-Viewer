@@ -167,9 +167,7 @@ To maximize throughput and prevent file conflicts, work on Artist is strictly pa
 
 ## 7. Track A: still unnamed (after Claude's 2026-09-27 pass)
 
-These fields have no named alias yet. Everything else carries a Director name.
-- **System:** `net_colour` (3 bytes after the 0xff marker), `net_i32` (network-drawing floats, low value).
-- **Commands:** `cmd_ref` / `cmd_bit4` on the command base (0 on every command in all sample files).
+All fields listed here earlier are now resolved. Every stored field has a Director name, or is documented as reserved/legacy with the code evidence.
 
 Resolved on 2026-09-28:
 - **Node `+0x8c`** is the Serial Number (`serial_number`, 8-digit hex, blank when 0). Setter `FUN_00ca5040`; the node dialog `FUN_00b9f990` rejects a serial already used by another node.
@@ -187,6 +185,8 @@ Resolved on 2026-09-28:
   - SIC only: `aes67_16` is `device_uuid`, and `aes67_tail` is `bolero_discovery_ip` / `bolero_discovery_port` (the Discovery page).
   - `aes67_list_a/b` are the ids of owned child objects; the loader ignores them.
   - Suggested Excel additions for the Cards sheet: PTP role/mode and priorities, NMOS enabled, Bolero discovery IP:port, DHCP / IGMP per media.
+- **Commands:** `cmd_ref` is the object that auto-created the command (`created_by`; the UI shows " (created by %s)", `FUN_00c57290`). `cmd_bit4` (`+0x94`) is reserved: only load, save and init touch it in 8.9.
+- **System:** `net_i32` is the network-drawing box (`net_geom`, as floats). `net_colour` (`+0x4e4`) is a legacy colour: its setter `FUN_00c9dd10` has no caller and the default is `ffffff`.
 - **VoIP card** `voip_u32`: reserved. The loader `FUN_00c28870` discards it and the writer always writes 0.
 
 Suggested method:
