@@ -267,3 +267,11 @@ All 16 RGB values in `SWATCH_COLORS` match Director's COLORREF table at `0xfeb4b
 - Vtable slot 0x30 returns each class code. Every concrete CPhys class in Director has a reader; only the non-serialised `CPhysTlnObj` and `CPhysGlobalObject` do not.
 - The readers never exercised by the sample files were checked against Director's load paths: the command readers, NSA device, VoIP device, event and scheduler task.
 - Fields that Director stores but never shows, or reads and discards, are marked in the reader comments.
+
+## 10. Track B bug found by Claude's smoke test (2026-09-28)
+
+`python export_tool.py .. --format all --out-dir <dir>`: all five `.Art` files export fine; all eight `.bol` files fail with "expected str, bytes or os.PathLike object, not dict".
+- `export_tool.py` line 150 calls `B.export_to_excel(res, str(xlsx_path))` with the parsed result `res`.
+- But `bol_faithful.export_to_excel(path, ...)` expects the `.bol` file path: it calls `parse_file(path)` itself, at line 472.
+- Fix (Track B): pass the source path, e.g. `B.export_to_excel(str(path), str(xlsx_path))`, or add an entry point that takes a parsed result.
+- Not changed by Claude: `export_tool.py` is Track B and `bol_faithful.py` is untracked.
