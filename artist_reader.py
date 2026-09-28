@@ -1382,6 +1382,10 @@ def read_port(ar, o, pool_state=0):
         o['port_str'] = ar.string()
     if v > 0x30:
         o['audiopatch_flags'] = o['port_398'] = list(ar._take(ar.u8()))   # +0x398: 9-byte array of Audiopatch bypass/mute flags
+        # bitset over audio-patch element indices (setter FUN_00cbbab0, byte i // 8, bit i % 8): the element's
+        # 'Adjust from command.' checkbox (control 1810, amp element dialogs FUN_009cabf0 / FUN_009cbcf0)
+        o['adjust_from_command_elements'] = [i for i in range(8 * len(o['audiopatch_flags']))
+                                             if o['audiopatch_flags'][i // 8] >> (i % 8) & 1]
         o['fn_key_assignment'] = ar.u8()
     if v >= 0x3d and v >= 0x2d and (flags >> 21) & 1:
         if ar.u8() != 0xff:
