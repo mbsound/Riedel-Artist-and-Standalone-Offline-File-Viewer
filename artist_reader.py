@@ -1158,15 +1158,15 @@ def read_port_c0d420(ar):
     else:
         s['streams'] = [(ar.i32(), ar.i16()) for _ in range(2)]
     if v >= 0x1a0:
-        s['name2'], s['flag'] = ar.string(), ar.u8() == 1
+        s['name2'], s['flag'] = ar.string(), ar.u8() == 1   # flag +0x14: stored only (no page or property uses it)
         ar.u8()
     s['u16a'] = ar.u16()
     if v >= 0x70:
         s['u16b'] = ar.u16()
     if v >= 0x1a0:
-        s['u8a'] = ar.u8()
+        s['u8a'] = ar.u8()                              # +0x1a: stored only
     if v >= 0x1d0:
-        s['u8b'] = ar.u8()
+        s['u8b'] = ar.u8()                              # +0x1b PlayMode (the page treats 0 as its first option)
     # Names from the port property getter FUN_00cb9dc0 (Director's automation interface).
     s['ip_address'], s['listen_port'] = s['streams'][0][0], s['streams'][0][1]
     if len(s['streams']) > 1:
