@@ -864,8 +864,12 @@ def read_key(ar, o):
 def read_lwl(ar, o):
     """CPhysLWL (0x05) FUN_00c89bb0: fibre link between two frames."""
     o['lwl_pairs'] = [(ar.i32(), ar.i32()) for _ in range(ar.u32())]
-    o['node_a'] = ar.u32()
+    # the pairs are float (x, y) waypoints of the link's line on the network drawing
+    f = lambda i: struct.unpack('<f', struct.pack('<i', i))[0]
+    o['drawing_points'] = [(f(x), f(y)) for x, y in o['lwl_pairs']]
+    o['node_a'] = ar.u32()                               # the two CPhysNode frames the fibre joins
     o['node_b'] = ar.u32()
+    o['nodes'] = (o['node_a'], o['node_b'])
 
 
 def read_key_markers(ar, o):
