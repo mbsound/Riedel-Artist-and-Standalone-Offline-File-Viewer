@@ -275,3 +275,21 @@ All 16 RGB values in `SWATCH_COLORS` match Director's COLORREF table at `0xfeb4b
 - But `bol_faithful.export_to_excel(path, ...)` expects the `.bol` file path: it calls `parse_file(path)` itself, at line 472.
 - Fix (Track B): pass the source path, e.g. `B.export_to_excel(str(path), str(xlsx_path))`, or add an entry point that takes a parsed result.
 - Not changed by Claude: `export_tool.py` is Track B and `bol_faithful.py` is untracked.
+
+**Fixed by Claude on 2026-09-28, at the user's request ("fix all bugs"). This touched Track B files; commit 7c79a27.**
+- `export_tool.py`:
+  - The `.bol` export now passes the file path to `bol_faithful.export_to_excel`. All 13 sample files export.
+  - The node count now uses class 3 only.
+  - The entry points accept string paths.
+- `art_to_excel.py`, command describer:
+  - Class 0x15 is **GPIO**, not Route Audio. Route is 0x0a, which used to show as "Cmd 0x0a" with "None -> None".
+  - Every command type is now described, and missing destinations read "(no destination)" or the trunk target.
+- `art_to_excel.py`, Logic & GPIO sheet:
+  - It read the wrong classes (0x0a/0x0b/0x05). Now 0x40 sources, 0x41 destinations, 0x42 lines.
+  - It adds the gates (`gate_type`) and clocks, and shows destination trigger counts instead of raw lists.
+- `art_to_excel.py`, other fixes:
+  - The summary's logic count.
+  - The IFB sort key is `ifb_number`.
+  - The CLI now honours `-h`/`--help` (it used to regenerate everything), rejects unknown options, fixes `-o` given last, and accepts a folder for several inputs.
+- `bol_faithful.py` (untracked, **not committed**): the DSCP row reads "Audio / PTP Event / PTP General" as "46 / 34 / 36" instead of a raw Python list.
+- Check: after the fixes, no cell in any of the 13 workbooks shows `None ->`, `Cmd 0x…`, `Port ID None`, `Pin None`, or a raw list or dict.
