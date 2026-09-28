@@ -1197,17 +1197,25 @@ def read_port_stream(ar, with_u16b):
 
 def read_panel_ui(ar, cls):
     """C12xxPanelUIProperties FUN_00a2e1c0 / C23xxPanelUIProperties FUN_00a2dd00."""
+    # Per-panel copy of the Port Settings UI options (pages C12xxPanelUIConfigPP init FUN_009a3f60 /
+    # C23xxPanelUIConfigPP init FUN_009a9d30).
     v, u = ar.version, {}
     if cls in PANEL_12XX:
-        u['u8a'], u['u8b'] = ar.u8(), ar.u8()
-    u['flag'] = ar.u8() == 1
+        u['u8a'], u['u8b'] = ar.u8(), ar.u8()            # +0x1c / +0x1d (getters vtable+4 / +0xc)
+        u['panel_operation_mode'] = 'Talk - Listen' if u['u8a'] == 1 else 'Talk - Mute'
+        u['show_colors_on'] = 'Key Ring' if u['u8b'] else 'Display'
+    u['flag'] = ar.u8() == 1                              # +0x1e 'Enable colors'
+    u['enable_colors'] = u['flag']
     u['named_codes'] = [(ar.u16(), ar.string()) for _ in range(2)]   # copied from CPhysNet's 2 entries
     if v > 0x3cf:
         u['secret_a'], u['secret_b'] = ar.string(inverted=True), ar.string(inverted=True)
+        u['live_view_password'], u['panel_menu_pin'] = u['secret_a'], u['secret_b']
     if v > 0x4af:
-        u['u8c'] = ar.u8()
+        u['u8c'] = ar.u8()                                # +0x1f 'Show volume bars'
+        u['show_volume_bars'] = _pick(['dynamic', 'permanent'], u['u8c'])
     if v >= 0x4c0:
-        u['u8d'] = ar.u8()
+        u['u8d'] = ar.u8()                                # +0x20 'Incoming Call Signalization'
+        u['incoming_call_signalization'] = _pick(['blinking', 'permanent'], u['u8d'])
     return u
 
 
@@ -2337,11 +2345,11 @@ def read_ifb_endpoint(ar, name):
         return None
     e = {'role': name, 'type': t}
     if t == 1:                                           # port FUN_00aeeea0
-        e['port'], e['u16'] = ar.u32(), ar.u16()
+        e['port'], e['u16'] = ar.u32(), ar.u16()         # u16 is skipped by the loader
     elif t == 2:                                         # group FUN_00aee860
         e['group'] = ar.u32()
     elif t == 4:                                         # trunk FUN_00aef350
-        e['a'], e['b'], e['u16'] = ar.u32(), ar.u32(), ar.u16()
+        e['a'], e['b'], e['u16'] = ar.u32(), ar.u32(), ar.u16()   # all skipped: the loader returns no endpoint
     else:
         raise ArtFormatError('IFB endpoint type %d has no loader in Director' % t)
     return e
