@@ -192,9 +192,14 @@ def u32_list(ar):
 # Every class's Serialize reads its own fields first and ends with this.
 # ---------------------------------------------------------------------------------------------
 def read_base(ar, o):
-    o['base_5c'] = ar.u32()               # object field +0x5c (0x4000 in 8.6 files, 0x5000 in 8.9)
+    o['base_5c'] = ar.u32()               # +0x5c change mark: 0x5000 is set by the object's SetModified
+    # (vtable+0x78 -> FUN_00ca93f0) on create or edit; the document Serialize FUN_00d28500 resets every object
+    # to 0x4000 after each load and save (FUN_00cdd3b0). So 0x5000 in a file = created / changed in the
+    # editing session that produced this save. Partial-file export borrows the mark (FUN_00d29b50).
+    o['changed_last_session'] = o['base_5c'] == 0x5000
     o['owner_user'] = ar.u32()            # CPhysUser id (the "system id" of the old notes)
-    o['base_58'] = ar.u32()               # object id looked up via FUN_0078e4f0, 0 = none
+    o['base_58'] = ar.u32()               # +0x58 parent object (key -> panel, command -> key, card -> node), 0 = none
+    o['parent'] = o['base_58']
     n = ar.u32() if ar.version < 0x25 else ar.u8()
     # (user_id, rights_byte): bit 0 = Edit (1), bit 1 = Create children (2), bit 2 = Delete children (4); mask 7 = all
     o['user_rights'] = [(ar.u32(), ar.u8()) for _ in range(max(n, 0))]
