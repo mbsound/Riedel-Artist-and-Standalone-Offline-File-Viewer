@@ -2502,10 +2502,17 @@ def read_connect_voip_device(ar, o):
 def read_nsa_device(ar, o):
     """CPhysNsaDevice003A..010C (0x50e-0x512, 0x516, 0x518) FUN_00a41450 (untested)."""
     ar.u8()
-    o['address_a'] = (ar.i32(), ar.u16())
-    o['address_b'] = (ar.i32(), ar.u16())
-    o['nsa_i32'] = ar.i32()
-    o['nsa_bytes'] = list(ar._take(3))
+    # "NSA Device" page (dialog 721; init FUN_009b4f30, apply FUN_009b4b2b)
+    o['address_a'] = (ar.i32(), ar.u16())                # +0xb4 / +0xb8: Media 1 IP address, port
+    o['address_b'] = (ar.i32(), ar.u16())                # +0xbc / +0xc0: Media 2 IP address, port
+    o['media1_ip'], o['media1_port'] = o['address_a']
+    o['media2_ip'], o['media2_port'] = o['address_b']
+    o['nsa_i32'] = ar.i32()                              # +0xb0: IP address WebUI
+    o['webui_ip'] = o['nsa_i32']
+    o['nsa_bytes'] = nb = list(ar._take(3))              # +0xc2 Play Mode, +0xc3 PTP Role, +0xc4 Receive Buffer (ms)
+    o['play_mode'] = _pick(['synton', 'synchron'], nb[0])
+    o['ptp_role'] = _pick(PTP_ROLES, nb[1])
+    o['receive_buffer_ms'] = nb[2]
     o['gpio_in'] = [ar.u32() for _ in range(ar.u16())]
     o['gpio_out'] = [ar.u32() for _ in range(ar.u16())]
     o['connections'] = [(ar.u16(), ar.u32()) for _ in range(ar.u16())]
