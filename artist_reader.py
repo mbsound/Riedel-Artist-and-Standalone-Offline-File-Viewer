@@ -1939,9 +1939,11 @@ def read_group(ar, o):
     members = [ar.u32() for _ in range(ar.u32())]
     o['members'] = members
     o['member_words'] = [ar.u16() for _ in members]
+    # bit 0 -> the Members page 'Channel' column (+0xb0 byte array): uses the 2nd audio channel
+    o['member_second_channel'] = [bool(w & 1) for w in o['member_words']]
     live = [m for m in members if m in ar.ids]          # Director drops unresolved members here
     if v > 0x36:
-        o['member_flags'] = list(ar._take(len(live)))
+        o['member_flags'] = list(ar._take(len(live)))   # read and discarded by the group loader
     read_member_gpio_tail(ar, o)
     if v >= 0x380:
         o['keypad_shortcut'] = ar.u16()                   # +0x90 Keypad shortcut (65535 = none; setter FUN_00c6f4f0)
@@ -1965,6 +1967,11 @@ def read_conference(ar, o):
     ar.skip(len(members))
     if v >= 0x11:
         o['member_flags'] = list(ar._take(len(members)))   # & 0xef on load
+    # Per member, as Director's 'MemberList' property reports it (getter FUN_00c58040 case 4):
+    # UseSecondChannel = word bit 0, Talk = flag bit 5, Listen = flag bit 6.
+    mf = o.get('member_flags') or [0] * len(members)
+    o['member_details'] = [{'member': m, 'use_second_channel': bool(w & 1), 'talk': bool(f & 0x20),
+                            'listen': bool(f & 0x40)} for m, w, f in zip(members, o['member_words'], mf)]
     read_member_gpio_tail(ar, o)
     # flags (FUN_00c59e90): bit 0 Enable for trunk call, bit 2 -> +0xa0 (MCR use), bit 4 DynaConf
     o['trunk_enabled'], o['mcr_use'], o['dynaconf'] = bool(o['flags'] & 1), bool(o['flags'] & 4), bool(o['flags'] & 0x10)
