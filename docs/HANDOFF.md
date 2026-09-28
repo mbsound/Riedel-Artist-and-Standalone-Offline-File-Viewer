@@ -138,17 +138,25 @@ To maximize throughput and prevent file conflicts, work on Artist is strictly pa
 
 ### TRACK B: Antigravity's Assigned Duties (Excel Reporting Engine & Presentation)
 **Scope:** `Code/art_to_excel.py`, `Code/export_tool.py`.
+**Status:** ALL DELIVERABLES COMPLETED & VERIFIED (2026-09-28).
 **Deliverables:**
-1. **Swatch Color Integration:**
-   - Add "Group Color" and "Text Color" columns to Sheet 6 (`Panels & Keys`) using `swatch_color_name` (displaying both color name and hex code).
-   - Add "Color" column to Sheet 7 (`Conferences`) and Sheet 8 (`Groups`).
-   - Add Dialog 729 Function Colors and Monitor Defaults to Sheet 2 (`System Settings`).
-2. **VoIP SIP Accounts on Grid:**
+1. **Swatch Color Integration:** (Done)
+   - Soft swatch background fills and contrasting foreground colors applied on Sheet 6 (`Panels & Keys`), Sheet 7 (`Conferences`), and Sheet 8 (`Groups`).
+   - Dialog 729 Function Colors and Monitor Defaults rendered on Sheet 2 (`System Settings`).
+2. **VoIP SIP Accounts on Grid:** (Done)
    - Display `local_sip_id`, `remote_host`, `remote_sip_id` on Sheet 5 (`Ports`) and Sheet 12 (`IP Trunks`).
-3. **Visual Styling & Formatting:**
-   - Polish headers, column widths, freeze panes, number formats (e.g. dB gains, IP addresses, port numbers).
-4. **Unified CLI Runner (`Code/export_tool.py`):**
-   - Provide a single command-line interface to batch export `.Art` (and `.bol`) files to Excel and JSON with verification logs.
+3. **Visual Styling, Interactive Navigation & Hyperlinks:** (Done)
+   - Table of Contents on Sheet 1 (`Summary`) with direct clickable Excel hyperlinks (`#'Sheet Name'!A1`) to all 13 detail sheets.
+   - Header banner quick-navigation button (`<- Summary`) on all sheets linking back to Sheet 1.
+   - Pinned frozen panes (`ws.freeze_panes = 'A5'`) across all sheets.
+   - Sheet 6 (`Panels & Keys`): Key target destinations are direct, clickable Excel hyperlinks jumping straight to their exact row in `Ports`, `Conferences`, `Groups`, or `IFB Routing`!
+   - Sheet 3 (`Nodes & Topology`): Added Serial Number, Error Alarms mask/count, Relay 1/2 Alarms.
+   - Sheet 4 (`Cards & Slots`): Enriched network & sync information with Media DHCP/IGMP/Speed, PTP domain/role/mode/prio, NMOS status/mode/port, Bolero Discovery IP:Port.
+   - Sheet 5 (`Ports`): Added `Media Interface` column ('Media 1', 'Media 2', 'none').
+   - Sheet 11 (`Logic & GPIO`): Added Logic Sources (`lsrc`) with decoded source types and 2nd audio channel, Logic Destinations (`ldst`) with active/inactive trigger counts, and Monoflop gates with retrigger pulse duration.
+4. **Unified CLI Runner & Cross-Correlation (`Code/export_tool.py`):** (Done)
+   - Batch exports `.Art` and `.bol` files to Excel and JSON with strict zero-residual verification gate.
+   - Added `--correlate` option that performs a full cross-reference audit matching Bolero beltpack assignments configured in Artist against standalone Bolero `.bol` files (exact User IDs and label matching).
 
 ---
 
