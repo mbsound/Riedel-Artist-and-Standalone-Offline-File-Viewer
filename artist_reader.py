@@ -2483,12 +2483,20 @@ def read_cmd_select_ap(ar, o):
 
 
 def read_cmd_signal(ar, o):
-    """CPhysCmdSignal (0x26) FUN_00c4f7a0: call signal to another key."""
-    _cmd_word(ar, o)
-    o['target_key'] = ar.u32()                           # CPhysBaseKey id
-    o['signal_u16'], o['signal_u8a'], o['signal_u8b'] = ar.u16(), ar.u8(), ar.u8()
+    """CPhysCmdSignal (0x26) FUN_00c4f7a0: the "Remote Key" function (page CCmdSignalPP, dialog 197,
+    init FUN_00a19380)."""
+    _cmd_word(ar, o)                                     # +0x9c: action bits + marker (bit 11 cleared before 0x4d0)
+    w = o['cmd_word']
+    o['press_key'] = bool(w & 0x4000)                    # 'Press key'
+    o['press_key_lever_up'] = bool(w & 0x200)            # 'Press key lever up' (1200 series SmartPanels)
+    o['lock_key'] = bool(w & 0x8000)                     # 'Lock key (so that the local operator cannot press it)'
+    o['set_signaling_marker'] = not (w & 0x2000)         # 'Set the Signaling Marker:' (stored inverted)
+    o['signaling_marker'] = _pick(MARKER_NAMES, w & 0xff)   # marker combo (table 0xfeef90 of marker indices)
+    o['set_key_text'] = bool(w & 0x400)                  # 'Set key text:'
+    o['target_key'] = ar.u32()                           # +0x98 CPhysBaseKey id (destination key)
+    o['signal_u16'], o['signal_u8a'], o['signal_u8b'] = ar.u16(), ar.u8(), ar.u8()   # skipped by the loader
     if ar.version >= 0x43:
-        o['signal_text'] = ar.string()
+        o['signal_text'] = ar.string()                   # +0xa0 key text
     elif ar.version > 0x34:
         o['signal_text'] = ar._take(8).decode('cp1252', 'replace').rstrip('\0')
     o['key'] = ar.u32()
@@ -2513,8 +2521,9 @@ def read_cmd_control_ap(ar, o):
     """CPhysCmdControlAudioPatch (0x31) FUN_00c36e80: key first, then port + value."""
     o['key'] = ar.u32()
     o['target'], o['target_port_number'] = ar.u32(), ar.u16()
-    o['ap_value'] = ar.i32()
-    o['ap_flag'] = ar.u8() != 0
+    o['ap_value'] = ar.i32()                             # +0x9c Audiopatch Element (Amp IN / Amp OUT / XP element)
+    o['ap_flag'] = ar.u8() != 0                          # +0xa0 Key Function (dialog 506, init FUN_00a6aca0)
+    o['key_function'] = 'Use key for gain adjust' if o['ap_flag'] else 'Use key to mute/unmute'
     read_cmd_base(ar, o)
 
 
@@ -2552,30 +2561,47 @@ def read_cmd_dim_level(ar, o):
 def read_cmd_dial(ar, o):
     """CPhysCmdDial (0x36) FUN_00c37da0."""
     _cmd_word(ar, o)
-    o['dial_u8'] = ar.u8()
+    o['dial_u8'] = ar.u8()                               # +0x98 Function (dialog 217, init FUN_00a6bd40)
+    o['dial_function'] = _pick(['Dial only', 'Hang up only', 'Dial and Hang up', 'Stop Connection'], o['dial_u8'])
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
 
+# Telephone keypad key functions (FUN_00c42af0, default key texts).
+KEYPAD_FUNCTIONS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#', 'CL', 'DISPLAYH', 'DISPLAYL',
+                    'REPLYH', 'REPLYL', 'PHONE NO']
+
+
 def read_cmd_keypad(ar, o):
     """CPhysCmdKeypad (0x49) FUN_00c425a0."""
-    o['keypad_u8'] = ar.u8()
+    o['keypad_u8'] = ar.u8()                             # +0x98 Key Function (dialog 248, init FUN_00a148c0)
+    o['keypad_function'] = _pick(KEYPAD_FUNCTIONS, o['keypad_u8'])
     if ar.version >= 0x2f:
-        o['keypad_text'] = ar.string()
+        o['keypad_text'] = ar.string()                   # +0x9c Key Function Text
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
 
 def read_cmd_io_gain(ar, o):
     """CPhysCmdIOGain (0x4f) FUN_00c411f0: no key field (taken from the base trailer)."""
-    o['gain_flags'] = ar.u8()
-    o['target'], o['target_port_number'] = ar.u32(), ar.u16()
+    o['gain_flags'] = ar.u8()                            # +0x9c bit 0: radio pair on dialog 410 (FUN_00a140d0)
+    o['gain_mode'] = ('Select the destination port(s) with another panel key' if o['gain_flags'] & 1
+                      else 'Adjust the following port')
+    o['target'], o['target_port_number'] = ar.u32(), ar.u16()   # +0x98 Destination
     read_cmd_base(ar, o)
+
+
+# Norm sidetone level list (runtime table 0x12f0348).
+SIDETONE_LEVELS = ['6 dB', '3 dB', '0 dB', '-3 dB', '-6 dB', '-9 dB', '-12 dB', '-18 dB', '-24 dB', 'mute']
 
 
 def read_cmd_sidetone(ar, o):
     """CPhysCmdSidetone (0x5e) FUN_00c4d9a0."""
-    o['sidetone'] = list(ar._take(3))
+    o['sidetone'] = st = list(ar._take(3))               # +0x98 / +0x99 / +0x9a (dialog 428, init FUN_00a17520)
+    o['enable_speaker_mode'] = bool(st[0] & 1)
+    o['enable_headset_mode'] = bool(st[0] & 2)
+    o['applies_to_2nd_channel'] = bool(st[1] & 2)
+    o['norm_sidetone_level'] = _pick(SIDETONE_LEVELS, st[2])
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
