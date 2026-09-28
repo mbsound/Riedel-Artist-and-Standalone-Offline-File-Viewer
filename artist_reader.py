@@ -638,7 +638,7 @@ def read_cmd_listen(ar, o):
 def read_cmd_gpio(ar, o):
     """CPhysCmdGpio (0x15) FUN_00c3cf40."""
     v = ar.version
-    o['cmd_word'] = ar.u32() if v < 0x25 else ar.u16()
+    o['cmd_word'] = ar.u32() if v < 0x25 else ar.u16()   # reserved: discarded by the loader
     o['gpio'] = gid = ar.u32()            # CPhysGpioIn/Out id
     if v > 0x13:
         if v < 0x550:
@@ -732,14 +732,14 @@ def read_cmd_route(ar, o):
 def read_cmd_logic(ar, o):
     """CPhysCmdLogic (0x44) FUN_00c47060."""
     o['logic'] = ar.u32()
-    o['cmd_word'] = ar.u32() if ar.version < 0x25 else ar.u16()
+    o['cmd_word'] = ar.u32() if ar.version < 0x25 else ar.u16()   # reserved: discarded by the loader
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
 
 def read_cmd_beep(ar, o):
     """CPhysCmdBeep (0x35) FUN_00c2adf0."""
-    o['cmd_word'] = ar.u32() if ar.version < 0x25 else ar.u16()
+    o['cmd_word'] = ar.u32() if ar.version < 0x25 else ar.u16()   # reserved: discarded by the loader
     o['target'] = ar.u32()
     o['target_port_number'] = ar.u16()
     o['key'] = ar.u32()
@@ -2492,21 +2492,33 @@ def read_cmd_control_ap(ar, o):
     read_cmd_base(ar, o)
 
 
+# Dim steps (Director's runtime table 0x12ed32c, filled by FUN_006455e0); index 0..7.
+DIM_LEVELS = ['0 dB', '-3 dB', '-6 dB', '-9 dB', '-12 dB', '-18 dB', '-24 dB', 'mute']
+
+
 def read_cmd_dim_speaker(ar, o):
-    """CPhysCmdDimSpeaker (0x33) FUN_00c3ad00."""
-    _cmd_word(ar, o)
+    """CPhysCmdDimSpeaker (0x33) FUN_00c3ad00. Only property: 2 'DimSpeakerBy' (+0x9c, setter FUN_00c3a1d0
+    rejects values over 7)."""
+    _cmd_word(ar, o)                      # reserved: the loader reads it into a scratch variable
     o['dim'] = ar.u8()
+    o['dim_speaker_by'] = _pick(DIM_LEVELS, o['dim'])
     o['target'], o['target_port_number'] = ar.u32(), ar.u16()
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
 
 def read_cmd_dim_level(ar, o):
-    """CPhysCmdDimLevel (0x34) FUN_00c39700: two ports and a level."""
-    _cmd_word(ar, o)
-    o['dim'] = ar.u8()
-    o['port_a'], o['port_a_u16'] = ar.u32(), ar.u16()
-    o['port_b'], o['port_b_u16'] = ar.u32(), ar.u16()
+    """CPhysCmdDimLevel (0x34) FUN_00c39700: two ports and a level. Properties (names FUN_00c386c0,
+    getter FUN_00c38760): 2 Source +0x9c, 3 SourceUsesSecondChannel +0xa4, 4 Destination +0x98,
+    5 DestinationUsesSecondChannel +0xa0, 6 DimValue +0xa8."""
+    _cmd_word(ar, o)                      # reserved: the loader reads it into a scratch variable
+    o['dim'] = ar.u8()                                   # +0xa8 DimValue
+    o['dim_value'] = _pick(DIM_LEVELS, o['dim'])
+    o['port_a'], o['port_a_u16'] = ar.u32(), ar.u16()    # +0x98 Destination; u16 = port address + 2nd-channel bit
+    o['port_b'], o['port_b_u16'] = ar.u32(), ar.u16()    # +0x9c Source
+    o['destination'], o['source'] = o['port_a'], o['port_b']
+    o['dest_uses_2nd_channel'] = bool(o['port_a_u16'] & 1)     # +0xa0
+    o['source_uses_2nd_channel'] = bool(o['port_b_u16'] & 1)   # +0xa4
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
