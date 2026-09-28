@@ -2497,7 +2497,7 @@ def _cmd_word(ar, o):
 def read_cmd_select_ap(ar, o):
     """CPhysCmdSelAP (0x25) FUN_00c4bba0: select audio patch."""
     _cmd_word(ar, o)
-    o['audiopatch'], o['ap_u16'] = ar.u32(), ar.u16()
+    o['audiopatch'], o['ap_u16'] = ar.u32(), ar.u16()    # ap_u16 = the patch's port address; loader discards it
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
@@ -2532,7 +2532,7 @@ def read_cmd_word_only(ar, o):
 
 def read_cmd_u32_only(ar, o):
     """CPhysCmdEditIFB (0x32), CPhysCmdKillMic (0x4d), CPhysCmdAutoListenOff (0x4e)."""
-    o['cmd_u32'] = ar.u32()
+    o['cmd_u32'] = ar.u32()                              # reserved: the loaders discard it
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
@@ -2628,7 +2628,7 @@ def read_cmd_sidetone(ar, o):
 
 def read_cmd_send_string(ar, o):
     """CPhysCmdSendString (0x5f) FUN_00c4c340."""
-    o['send_target'] = ar.i32()
+    o['send_target'] = ar.i32()                          # +0x9c: stored only (not shown on dialog 429)
     o['send_text'] = ar.string()
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
@@ -2643,9 +2643,13 @@ def read_cmd_hot_mic(ar, o):
 
 def read_cmd_clone_output(ar, o):
     """CPhysCmdCloneOutputPort (0x503) FUN_00c30180."""
+    # Property names FUN_00c2e790: OutputToCloneAddress +0x98, OutputToCloneSecondChannel +0x9c,
+    # ClonedOutputAddress +0xa4, ClonedOutputSecondChannel +0xa8 (the loader keeps bit 0 of each u16)
     o['source'], o['source_u16'] = ar.u32(), ar.u16()
     o['dest'], o['dest_u16'] = ar.u32(), ar.u16()
-    o['clone_u32'] = ar.u32()
+    o['output_to_clone_second_channel'] = bool(o['source_u16'] & 1)
+    o['cloned_output_second_channel'] = bool(o['dest_u16'] & 1)
+    o['clone_u32'] = ar.u32()                            # +0xb0: stored only (no page or property uses it)
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
