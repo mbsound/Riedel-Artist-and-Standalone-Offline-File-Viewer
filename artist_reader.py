@@ -1970,6 +1970,7 @@ def read_group(ar, o):
     if v > 0x36:
         o['member_flags'] = list(ar._take(len(live)))   # read and discarded by the group loader
     read_member_gpio_tail(ar, o)
+    o['trunk_enabled'] = bool(o.get('flags', 0) & 1)     # +0xc5 IsTrunkEnabled ('Enable for trunk call')
     if v >= 0x380:
         o['keypad_shortcut'] = ar.u16()                   # +0x90 Keypad shortcut (65535 = none; setter FUN_00c6f4f0)
     if v > 0x55f:
