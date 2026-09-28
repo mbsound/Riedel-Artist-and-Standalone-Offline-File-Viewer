@@ -160,6 +160,133 @@ def export_bolero_file(path, out_dir=None, fmt='excel', validate_only=False):
     return True, metrics, created_files
 
 
+def correlate_artist_and_bolero(files, out_dir=None, fmt='excel'):
+    """
+    Cross-references Bolero beltpack assignments across Artist (.Art) save files
+    and Bolero (.bol) save files. Analyzes User IDs, label mappings, and IP multicasts.
+    """
+    artist_files = [f for f in files if f.suffix.lower() == '.art']
+    bolero_files = [f for f in files if f.suffix.lower() == '.bol']
+
+    if not artist_files or not bolero_files or not HAS_BOLERO:
+        return None
+
+    print("\n" + "=" * 80)
+    print(" BOLERO + ARTIST CROSS-CORRELATION AUDIT")
+    print("=" * 80)
+
+    # Collect all Artist Bolero beltpack ports
+    artist_bps = {}
+    for af in artist_files:
+        try:
+            h, recs = A.parse_art(af.read_bytes())
+            b_ports = [r for r in recs if r['class'] == 0x440]
+            entries = []
+            for p in b_ports:
+                om2 = p.get('output_media_2', {})
+                entries.append({
+                    'label': p.get('name', ''),
+                    'long_name': p.get('port_str', ''),
+                    'user_id': om2.get('bolero_user_id'),
+                    'multicast': om2.get('multicast'),
+                    'multicast_port': om2.get('multicast_port', 5004),
+                    'port_to_bolero': om2.get('multicast_port_to_bolero', 42000),
+                })
+            artist_bps[af.name] = entries
+        except Exception:
+            continue
+
+    # Collect all Bolero Standalone beltpacks
+    bolero_nets = {}
+    for bf in bolero_files:
+        try:
+            res = B.parse_file(str(bf))
+            net_name = res.get('network', {}).get('show_name') or res.get('network', {}).get('netName') or bf.stem
+            raw_bps = res.get('beltpacks', {}).get('beltpacks', []) if isinstance(res.get('beltpacks'), dict) else res.get('beltpacks', [])
+            bps = []
+            for b in raw_bps:
+                cfg = b.get('config', {})
+                art = cfg.get('artist', {})
+                bps.append({
+                    'id': cfg.get('id'),
+                    'name': cfg.get('name', ''),
+                    'artist_name': art.get('name', ''),
+                })
+            bolero_nets[bf.name] = {
+                'net_name': net_name,
+                'beltpacks': bps,
+            }
+        except Exception:
+            continue
+
+    total_art_bps = sum(len(v) for v in artist_bps.values())
+    total_bol_bps = sum(len(v['beltpacks']) for v in bolero_nets.values())
+    print(f" Analyzed {len(artist_bps)} Artist files ({total_art_bps} Bolero ports configured)")
+    print(f" Analyzed {len(bolero_nets)} Bolero files ({total_bol_bps} Standalone beltpacks configured)")
+    print("-" * 80)
+
+    correlation_results = []
+
+    for a_name, a_list in artist_bps.items():
+        if not a_list:
+            continue
+        a_uids = {b['user_id']: b for b in a_list if b['user_id'] is not None}
+        a_labels = {b['label'].strip().lower(): b for b in a_list if b['label']}
+
+        for b_name, b_data in bolero_nets.items():
+            b_list = b_data['beltpacks']
+            matched_uids = 0
+            matched_labels = 0
+            matches = []
+
+            for bp in b_list:
+                bid = bp['id']
+                bname = bp['name'].strip()
+                art_name = bp['artist_name'].strip().strip('<>')
+
+                m_uid = a_uids.get(bid)
+                m_label = a_labels.get(bname.lower()) or (a_labels.get(art_name.lower()) if art_name else None)
+
+                if m_uid or m_label:
+                    if m_uid and m_label and m_uid == m_label:
+                        matches.append({'bolero_bp': bname, 'id': bid, 'artist_label': m_uid['label'], 'match_type': 'EXACT (ID & Name)'})
+                        matched_uids += 1
+                        matched_labels += 1
+                    elif m_uid:
+                        matches.append({'bolero_bp': bname, 'id': bid, 'artist_label': m_uid['label'], 'match_type': 'User ID match'})
+                        matched_uids += 1
+                    elif m_label:
+                        matches.append({'bolero_bp': bname, 'id': bid, 'artist_label': m_label['label'], 'match_type': 'Name match'})
+                        matched_labels += 1
+
+            if matches:
+                pct = round(100.0 * len(matches) / max(len(b_list), 1), 1)
+                print(f" [CORRELATION MATCH] {a_name} <-> {b_name} ({b_data['net_name']})")
+                print(f"   -> Matched {len(matches)}/{len(b_list)} BPs ({pct}%) | {matched_uids} by User ID, {matched_labels} by Label")
+                correlation_results.append({
+                    'artist_file': a_name,
+                    'bolero_file': b_name,
+                    'net_name': b_data['net_name'],
+                    'matched_count': len(matches),
+                    'total_bolero_bps': len(b_list),
+                    'matches': matches
+                })
+
+    if not correlation_results:
+        print(" No direct cross-file beltpack overlaps detected across different shows.")
+    print("=" * 80)
+
+    # Save JSON report if format requested
+    if correlation_results and fmt in ('json', 'all'):
+        target_dir = pathlib.Path(out_dir) if out_dir else pathlib.Path('.')
+        report_path = target_dir / "bolero_artist_correlation_report.json"
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(correlation_results, f, indent=2)
+        print(f" Correlation report written to: {report_path}")
+
+    return correlation_results
+
+
 def collect_files(target_path):
     """Collect all .Art and .bol files from target path (file or dir)."""
     p = pathlib.Path(target_path)
@@ -181,6 +308,7 @@ def main():
     parser.add_argument('--format', choices=['excel', 'json', 'all'], default='excel', help="Export format (default: excel)")
     parser.add_argument('--out-dir', default=None, help="Output directory for generated files")
     parser.add_argument('--validate-only', action='store_true', help="Only validate files without writing outputs")
+    parser.add_argument('--correlate', action='store_true', help="Run Bolero + Artist beltpack cross-correlation audit")
     parser.add_argument('--quiet', action='store_true', help="Minimal output logging")
 
     args = parser.parse_args()
@@ -224,6 +352,10 @@ def main():
     print("-" * 80)
     print(f"Summary: {success_count} succeeded, {fail_count} failed out of {len(files)} total files.")
     print("=" * 80)
+
+    if args.correlate:
+        correlate_artist_and_bolero(files, out_dir=args.out_dir, fmt=args.format)
+
     return 0 if fail_count == 0 else 1
 
 

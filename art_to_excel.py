@@ -61,19 +61,38 @@ def bdr(style="thin", color=C['border']):
     return Border(left=s, right=s, top=s, bottom=s)
 
 
-def title_banner(ws, title, subtitle, max_col=8):
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
-    c1 = ws.cell(row=1, column=1, value=clean_val(title))
-    c1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-    c1.fill = fill(C['navy'])
-    c1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[1].height = 28
+def title_banner(ws, title, subtitle, max_col=8, show_home_link=True):
+    if show_home_link and max_col > 2:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col - 1)
+        c1 = ws.cell(row=1, column=1, value=clean_val(title))
+        c1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+        c1.fill = fill(C['navy'])
+        c1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
-    c2 = ws.cell(row=2, column=1, value=clean_val(subtitle))
-    c2.font = Font(name="Calibri", size=9, italic=True, color="FFFFFF")
-    c2.fill = fill(C['blue'])
-    c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        home = ws.cell(row=1, column=max_col, value="<- Summary")
+        home.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF", underline="single")
+        home.fill = fill(C['navy'])
+        home.alignment = Alignment(horizontal="center", vertical="center")
+        home.hyperlink = "#'Summary'!A1"
+
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
+        c2 = ws.cell(row=2, column=1, value=clean_val(subtitle))
+        c2.font = Font(name="Calibri", size=9, italic=True, color="FFFFFF")
+        c2.fill = fill(C['blue'])
+        c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    else:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+        c1 = ws.cell(row=1, column=1, value=clean_val(title))
+        c1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+        c1.fill = fill(C['navy'])
+        c1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
+        c2 = ws.cell(row=2, column=1, value=clean_val(subtitle))
+        c2.font = Font(name="Calibri", size=9, italic=True, color="FFFFFF")
+        c2.fill = fill(C['blue'])
+        c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
     ws.row_dimensions[2].height = 18
 
 
@@ -127,47 +146,70 @@ def auto_width(ws, extra=3, max_w=65):
 
 def format_command(cmd, byid):
     if not cmd:
-        return 'Empty', '', ''
+        return 'Empty', '', '', None
     cls = cmd.get('class', 0)
     prio = cmd.get('priority', '')
     if cls == 0x13:  # Call to Port
         target = byid.get(cmd.get('target'))
         name = target.get('port_str') or target.get('name') if target else f"Port ID {cmd.get('target')}"
         label = target.get('name', '') if target else ''
-        return 'Call to Port', name, prio
+        return 'Call to Port', name, prio, ('port', cmd.get('target'))
     elif cls == 0x14:  # Listen to Port
         target = byid.get(cmd.get('target'))
         name = target.get('port_str') or target.get('name') if target else f"Port ID {cmd.get('target')}"
         label = target.get('name', '') if target else ''
-        return 'Listen to Port', name, prio
+        return 'Listen to Port', name, prio, ('port', cmd.get('target'))
     elif cls == 0x16:  # Conference
         conf = byid.get(cmd.get('conference'))
         name = conf.get('long_name') or conf.get('label') if conf else f"Conf ID {cmd.get('conference')}"
-        return 'Conference', name, prio
+        return 'Conference', name, prio, ('conf', cmd.get('conference'))
     elif cls in (0x17, 0x12):  # Group
         grp = byid.get(cmd.get('group'))
         name = grp.get('long_name') or grp.get('label') if grp else f"Group ID {cmd.get('group')}"
-        return 'Group', name, prio
+        return 'Group', name, prio, ('group', cmd.get('group'))
     elif cls == 0x18:  # Reply
-        return 'Reply', '<REPLY>', prio
+        return 'Reply', '<REPLY>', prio, None
     elif cls == 0x67:  # Call to IFB
         ifb = byid.get(cmd.get('ifb'))
         name = ifb.get('long_name') or ifb.get('label') if ifb else f"IFB ID {cmd.get('ifb')}"
-        return 'Call to IFB', name, prio
+        return 'Call to IFB', name, prio, ('ifb', cmd.get('ifb'))
     elif cls == 0x15:  # Route Audio
         src = byid.get(cmd.get('source'))
         dst = byid.get(cmd.get('dest'))
         src_name = src.get('name') if src else str(cmd.get('source'))
         dst_name = dst.get('name') if dst else str(cmd.get('dest'))
-        return 'Route Audio', f"{src_name} -> {dst_name}", prio
+        return 'Route Audio', f"{src_name} -> {dst_name}", prio, None
     elif cls == 0x44:  # Logic
         log = byid.get(cmd.get('logic'))
         name = log.get('name') if log else cmd.get('cmd_name', '')
-        return 'Logic', name or f"Logic ID {cmd.get('logic')}", prio
+        return 'Logic', name or f"Logic ID {cmd.get('logic')}", prio, None
     elif cls == 0x70:  # Audio Patch
-        return 'Audio Patch', cmd.get('cmd_name', 'Audio Patch'), prio
+        return 'Audio Patch', cmd.get('cmd_name', 'Audio Patch'), prio, None
     else:
-        return f"Cmd 0x{cls:02x}", cmd.get('cmd_name', ''), prio
+        return f"Cmd 0x{cls:02x}", cmd.get('cmd_name', ''), prio, None
+
+
+def compute_target_row_map(recs):
+    """
+    Computes exact 1-indexed row numbers for all Ports, Conferences, Groups, and IFBs
+    to allow deterministic sheet-to-sheet cross-linking.
+    """
+    ports = [r for r in recs if r['class'] in A.PORT_TYPE_NAMES]
+    sorted_ports = sorted(ports, key=lambda p: (p.get('port_number', 0), p.get('port_index', 0)))
+    confs = sorted([r for r in recs if r['class'] == 0x012], key=lambda c: c.get('label', ''))
+    groups = sorted([r for r in recs if r['class'] == 0x011], key=lambda g: g.get('label', ''))
+    ifbs = sorted([r for r in recs if r['class'] == 0x066], key=lambda i: i.get('ifb_index', 0))
+
+    tmap = {}
+    for idx, p in enumerate(sorted_ports, 5):
+        tmap[('port', p['id'])] = ('Ports', idx)
+    for idx, c in enumerate(confs, 5):
+        tmap[('conf', c['id'])] = ('Conferences', idx)
+    for idx, g in enumerate(groups, 5):
+        tmap[('group', g['id'])] = ('Groups', idx)
+    for idx, ifb in enumerate(ifbs, 5):
+        tmap[('ifb', ifb['id'])] = ('IFB Routing', idx)
+    return tmap
 
 
 # ── Sheet 1: Summary ─────────────────────────────────────────────────────────
@@ -180,7 +222,7 @@ def build_summary_sheet(wb, h, recs, byid, filepath):
     schema_hex = f"0x{h.get('version', 0):03x}"
 
     title_banner(ws, f"Artist Matrix System Summary: {sys_name}",
-                 f"{director_ver}  |  File: {pathlib.Path(filepath).name}", max_col=4)
+                 f"{director_ver}  |  File: {pathlib.Path(filepath).name}", max_col=4, show_home_link=False)
 
     headers = ["Category", "Parameter / System Item", "Decoded Value", "Technical Description"]
     header_row(ws, 4, headers, bg=C['navy'])
@@ -233,6 +275,45 @@ def build_summary_sheet(wb, h, recs, byid, filepath):
         write_cell(ws, r_idx, 3, val, bg=bg, bold=True, align="center")
         write_cell(ws, r_idx, 4, desc, bg=bg)
 
+    # Table of Contents & Navigation Links
+    toc_row = len(rows) + 7
+    ws.merge_cells(start_row=toc_row - 2, start_column=1, end_row=toc_row - 2, end_column=4)
+    c_toc_title = ws.cell(row=toc_row - 2, column=1, value="Workbook Table of Contents & Direct Navigation")
+    c_toc_title.font = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
+    c_toc_title.fill = fill(C['navy'])
+    c_toc_title.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[toc_row - 2].height = 24
+
+    toc_headers = ["Sheet #", "Sheet Name", "Direct Navigation Link", "Decoded Contents & Operational Scope"]
+    header_row(ws, toc_row - 1, toc_headers, bg=C['blue'])
+
+    toc_entries = [
+        ("Sheet 2", "System Settings", "System-Wide Defaults, CPhysNet, Dialog 207/208/703/729, Function Colors & Key Markers"),
+        ("Sheet 3", "Nodes & Topology", "Artist Mainframes, Chassis Models, Serial Numbers, Alarm Masks, Fibre Links (CPhysLWL)"),
+        ("Sheet 4", "Cards & Slots", "Hardware Interface Cards, Sub-Bays, AES67 Media, PTP & NMOS Settings, MADI/Dante"),
+        ("Sheet 5", "Ports", "Digital Matrix Ports Grid: 1:1 replica of Director Ports Table with Gains, Room, Shortcuts & IPs"),
+        ("Sheet 6", "Panels & Keys", "Hardware SmartPanels, Beltpacks & Active Key Assignments with Swatch Fills & Linked Targets"),
+        ("Sheet 7", "Conferences", "Production Conferences / Partylines, Member Port Lists, Swatch Fills & Shortcuts"),
+        ("Sheet 8", "Groups", "Directed Talkgroups, Member Port Lists, Swatch Fills & Trunk Addresses"),
+        ("Sheet 9", "IFB Routing", "Broadcast IFB Channels, Dim Scales, Inputs, Mix-Minus & Output Endpoints"),
+        ("Sheet 10", "Audio Patch", "6x6 Matrix Mixing Crosspoints, Filters, Limiter/Compressor Dynamics & Gain Offsets"),
+        ("Sheet 11", "Logic & GPIO", "GPI Inputs, Relay Outputs, Logic Sources, Destinations, Monoflops & Logic Lines"),
+        ("Sheet 12", "IP Trunks", "Inter-Matrix IP Trunklines, VoIP Connections & SIP Accounts with Host Addresses & Codecs"),
+        ("Sheet 13", "Users & Access", "Operator & Admin Accounts, Roles, Permission Masks & Courtesy PINs"),
+        ("Sheet 14", "Scheduler", "Automated Matrix Scheduler Tasks, Calendar Recurrence & Linked Events"),
+    ]
+
+    for idx, (s_num, s_name, s_desc) in enumerate(toc_entries, toc_row):
+        bg = C['row_alt'] if idx % 2 == 0 else C['row_white']
+        ws.row_dimensions[idx].height = 20
+        write_cell(ws, idx, 1, s_num, bg=bg, align="center", bold=True)
+        write_cell(ws, idx, 2, s_name, bg=bg, bold=True)
+        link_cell = write_cell(ws, idx, 3, f"-> Open {s_name}", bg=bg, align="center")
+        link_cell.hyperlink = f"#'{s_name}'!A1"
+        link_cell.font = Font(name="Calibri", size=9, bold=True, color="0000EE", underline="single")
+        write_cell(ws, idx, 4, s_desc, bg=bg)
+
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -316,6 +397,7 @@ def build_system_settings_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 3, val, bg=bg, bold=True, align="center" if "Port" in param or "Mode" in param else "left")
         write_cell(ws, r_idx, 4, desc, bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -326,9 +408,13 @@ def build_nodes_sheet(wb, h, recs, byid):
     lwls = [r for r in recs if r['class'] == 5]
 
     title_banner(ws, "Artist Mainframe Nodes & Optical Fibre Ring Topology",
-                 f"Total Frames: {len(nodes)}  |  Total Fibre Links: {len(lwls)}", max_col=10)
+                 f"Total Frames: {len(nodes)}  |  Total Fibre Links: {len(lwls)}", max_col=14)
 
-    headers = ["#", "Node Name", "Node #", "Node ID", "Chassis Model", "Ring SOA", "Allocated Ports (NOA)", "Controller A", "Controller B", "PSU Configuration"]
+    headers = [
+        "#", "Node Name", "Node #", "Node ID", "Chassis Model", "Serial Number",
+        "Ring SOA", "Allocated Ports (NOA)", "Controller A", "Controller B",
+        "PSU Configuration", "Error Alarms", "Relay 1 Alarms", "Relay 2 Alarms"
+    ]
     header_row(ws, 4, headers, bg=C['teal'])
 
     for r_idx, n in enumerate(nodes, 5):
@@ -341,16 +427,28 @@ def build_nodes_sheet(wb, h, recs, byid):
         psu_2 = byid.get(n['power_supplies'][1]) if n.get('power_supplies') and len(n['power_supplies']) > 1 and n['power_supplies'][1] else None
         psu_text = "Dual Redundant" if (psu_1 and psu_2) else ("Single PSU" if psu_1 else "None Fitted")
 
+        serial_str = n.get('serial_number') or "—"
+        err_alarms = n.get('error_alarms', [])
+        err_str = f"0x{n.get('error_mask', 0):08X} ({len(err_alarms)} active)" if 'error_mask' in n else "Default"
+        r1_alarms = n.get('relay1_alarms', [])
+        r1_str = f"{len(r1_alarms)} active" if r1_alarms else "None"
+        r2_alarms = n.get('relay2_alarms', [])
+        r2_str = f"{len(r2_alarms)} active" if r2_alarms else "None"
+
         write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
         write_cell(ws, r_idx, 2, n.get('name', ''), bg=bg, bold=True)
         write_cell(ws, r_idx, 3, n.get('node_address', ''), bg=bg, align="center")
         write_cell(ws, r_idx, 4, n.get('node_id', ''), bg=bg, align="center")
         write_cell(ws, r_idx, 5, model, bg=bg)
-        write_cell(ws, r_idx, 6, n.get('soa', 0), bg=bg, align="center")
-        write_cell(ws, r_idx, 7, n.get('noa', 0), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 8, A.card_model(ctrl_a, n) if ctrl_a else "Empty", bg=bg)
-        write_cell(ws, r_idx, 9, A.card_model(ctrl_b, n) if ctrl_b else "Empty", bg=bg)
-        write_cell(ws, r_idx, 10, psu_text, bg=bg)
+        write_cell(ws, r_idx, 6, serial_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 7, n.get('soa', 0), bg=bg, align="center")
+        write_cell(ws, r_idx, 8, n.get('noa', 0), bg=bg, align="center", bold=True)
+        write_cell(ws, r_idx, 9, A.card_model(ctrl_a, n) if ctrl_a else "Empty", bg=bg)
+        write_cell(ws, r_idx, 10, A.card_model(ctrl_b, n) if ctrl_b else "Empty", bg=bg)
+        write_cell(ws, r_idx, 11, psu_text, bg=bg)
+        write_cell(ws, r_idx, 12, err_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 13, r1_str, bg=bg, align="center")
+        write_cell(ws, r_idx, 14, r2_str, bg=bg, align="center")
 
     # Secondary table: Fibre Links
     start_lwl = len(nodes) + 7
@@ -376,6 +474,7 @@ def build_nodes_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 5, nb.get('node_address') if nb else "", bg=bg, align="center")
         write_cell(ws, r_idx, 6, len(l.get('lwl_pairs', [])), bg=bg, align="center")
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -414,14 +513,38 @@ def build_cards_sheet(wb, h, recs, byid):
         if 'media' in c:
             m_list = c['media'] if isinstance(c['media'], list) else [c['media']]
             for m_idx, m in enumerate(m_list, 1):
-                if isinstance(m, dict) and m.get('ip'):
-                    m_ip = '.'.join(str(x) for x in (m['ip'] & 0xffffffff).to_bytes(4, 'big'))
-                    net_info.append(f"Media {m_idx} IP: {m_ip}")
+                if isinstance(m, dict):
+                    m_parts = []
+                    if m.get('ip'):
+                        m_ip = '.'.join(str(x) for x in (m['ip'] & 0xffffffff).to_bytes(4, 'big'))
+                        m_parts.append(m_ip)
+                    if m.get('dhcp'):
+                        m_parts.append("DHCP")
+                    if m.get('igmp_version'):
+                        m_parts.append(m['igmp_version'])
+                    if m.get('network_speed') and m['network_speed'] != 'Auto':
+                        m_parts.append(m['network_speed'])
+                    if m_parts:
+                        net_info.append(f"Media {m_idx}: {', '.join(m_parts)}")
         if 'interface_details' in c:
             for idx, idet in enumerate(c['interface_details'], 1):
                 net_info.append(f"Media {idx}: {idet.get('assigned_ports', 0)} ports")
                 if idet.get('sync_mode'):
                     sync_info.append(f"Media {idx}: {idet['sync_mode']}")
+        # PTP & Clock Sync
+        ptp = c.get('ptp_settings')
+        if ptp:
+            ptp_str = f"PTP: domain {ptp.get('domain', 0)}, {ptp.get('mode_name', '')}, {ptp.get('role_name', '')} (prio1: {ptp.get('priority1')})"
+            sync_info.append(ptp_str)
+        # NMOS
+        nmos = c.get('nmos')
+        if nmos and isinstance(nmos, dict):
+            nmos_status = "Enabled" if nmos.get('enabled') else "Disabled"
+            net_info.append(f"NMOS: {nmos_status} ({nmos.get('registration_mode', 'Auto')})")
+        # Bolero Discovery
+        if c.get('bolero_discovery_ip'):
+            b_ip = '.'.join(str(x) for x in (c['bolero_discovery_ip'] & 0xffffffff).to_bytes(4, 'big'))
+            net_info.append(f"Bolero Discovery: {b_ip}:{c.get('bolero_discovery_port', 30321)}")
         if c.get('class') == 0x107:  # Classic MADI
             net_info.append(f"Up: {c.get('up_interface')}, Down: {c.get('down_interface')}")
             sync_info.append(f"Frame: {c.get('frame_length')} ch, Block: {c.get('channel_block')}")
@@ -440,6 +563,7 @@ def build_cards_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 10, ' | '.join(net_info) if net_info else "—", bg=bg)
         write_cell(ws, r_idx, 11, ' | '.join(sync_info) if sync_info else "—", bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -451,11 +575,11 @@ def build_ports_sheet(wb, h, recs, byid):
     sorted_ports = sorted(ports, key=lambda p: (p.get('port_number', 0), p.get('port_index', 0)))
 
     title_banner(ws, "Artist Digital Matrix Ports Grid",
-                 f"Total Configured Ports: {len(ports)}  |  1:1 Replica of Riedel Director Ports Table", max_col=15)
+                 f"Total Configured Ports: {len(ports)}  |  1:1 Replica of Riedel Director Ports Table", max_col=16)
 
     headers = [
         "Port #", "Local 8-char Label", "Long Name", "Alias", "Subtitle",
-        "Port Type", "Node-Bay", "Architecture", "Input Gain", "Output Gain",
+        "Port Type", "Node-Bay", "Architecture", "Media Interface", "Input Gain", "Output Gain",
         "Room Code", "Room Mode", "2nd Channel", "Keypad Shortcut", "Streaming / Network IP"
     ]
     header_row(ws, 4, headers, bg=C['navy'])
@@ -510,19 +634,21 @@ def build_ports_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 6, p_type, bg=bg, bold=True)
         write_cell(ws, r_idx, 7, node_bay, bg=bg)
         write_cell(ws, r_idx, 8, arch, bg=bg, align="center")
-        write_cell(ws, r_idx, 9, in_gain, bg=bg, align="center")
-        write_cell(ws, r_idx, 10, out_gain, bg=bg, align="center")
-        write_cell(ws, r_idx, 11, room, bg=bg, align="center")
-        write_cell(ws, r_idx, 12, p.get('room_mode', ''), bg=bg, align="center")
-        write_cell(ws, r_idx, 13, "Yes" if p.get('second_audio_channel') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 14, shortcut, bg=bg, align="center")
-        write_cell(ws, r_idx, 15, ' | '.join(stream_info) if stream_info else "—", bg=bg)
+        write_cell(ws, r_idx, 9, p.get('media_interface') or '—', bg=bg, align="center")
+        write_cell(ws, r_idx, 10, in_gain, bg=bg, align="center")
+        write_cell(ws, r_idx, 11, out_gain, bg=bg, align="center")
+        write_cell(ws, r_idx, 12, room, bg=bg, align="center")
+        write_cell(ws, r_idx, 13, p.get('room_mode', ''), bg=bg, align="center")
+        write_cell(ws, r_idx, 14, "Yes" if p.get('second_audio_channel') else "No", bg=bg, align="center")
+        write_cell(ws, r_idx, 15, shortcut, bg=bg, align="center")
+        write_cell(ws, r_idx, 16, ' | '.join(stream_info) if stream_info else "—", bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
 # ── Sheet 6: Panels & Keys ────────────────────────────────────────────────────
-def build_panels_keys_sheet(wb, h, recs, byid):
+def build_panels_keys_sheet(wb, h, recs, byid, target_row_map=None):
     ws = wb.create_sheet(title="Panels & Keys")
     keys = [r for r in recs if r['class'] == 9 and r.get('commands')]
 
@@ -561,8 +687,8 @@ def build_panels_keys_sheet(wb, h, recs, byid):
                 panel_model = "Expansion Module"
 
         cmds = [byid.get(cid) for cid in k.get('commands', []) if cid in byid]
-        fn1, target1, prio1 = format_command(cmds[0], byid) if len(cmds) > 0 else ('Empty', '', '')
-        fn2, target2, prio2 = format_command(cmds[1], byid) if len(cmds) > 1 else ('', '', '')
+        fn1, target1, prio1, tkey1 = format_command(cmds[0], byid) if len(cmds) > 0 else ('Empty', '', '', None)
+        fn2, target2, prio2, tkey2 = format_command(cmds[1], byid) if len(cmds) > 1 else ('', '', '', None)
         sec_str = f"{fn2}: {target2}" if fn2 else "—"
 
         slot_num = k.get('slot', 0) + 1
@@ -588,10 +714,15 @@ def build_panels_keys_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 10, timeout_str, bg=bg, align="center")
         write_cell(ws, r_idx, 11, mon_state, bg=bg, align="center")
         write_cell(ws, r_idx, 12, fn1, bg=bg, bold=True)
-        write_cell(ws, r_idx, 13, target1, bg=bg)
+        c_t1 = write_cell(ws, r_idx, 13, target1, bg=bg)
+        if target_row_map and tkey1 and tkey1 in target_row_map:
+            t_sheet, t_row = target_row_map[tkey1]
+            c_t1.hyperlink = f"#'{t_sheet}'!A{t_row}"
+            c_t1.font = Font(name="Calibri", size=9, bold=True, color="0000EE", underline="single")
         write_cell(ws, r_idx, 14, prio1, bg=bg, align="center")
         write_cell(ws, r_idx, 15, sec_str, bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -633,6 +764,7 @@ def build_conferences_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 9, len(member_ports), bg=bg, align="center", bold=True)
         write_cell(ws, r_idx, 10, ', '.join(member_ports) if member_ports else "—", bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -672,6 +804,7 @@ def build_groups_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 7, g.get('trunk_address', 0), bg=bg, align="center")
         write_cell(ws, r_idx, 8, ', '.join(member_ports) if member_ports else "—", bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -718,6 +851,7 @@ def build_ifb_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 7, endpoint_name(i.get('mix_minus')), bg=bg)
         write_cell(ws, r_idx, 8, endpoint_name(i.get('output')), bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -758,6 +892,7 @@ def build_audiopatch_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 6, ', '.join(muted_outs) if muted_outs else "None", bg=bg)
         write_cell(ws, r_idx, 7, ' | '.join(dsp_info) if dsp_info else "Standard", bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -769,11 +904,12 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
     lsrc = [r for r in recs if r['class'] == 0x00a]
     ldst = [r for r in recs if r['class'] == 0x00b]
     lline = [r for r in recs if r['class'] == 0x005]
+    monos = [r for r in recs if r['class'] == 0x086]
 
     title_banner(ws, "Hardware GPIO Channels & Internal Matrix Logic",
-                 f"GPIO In: {len(gin)}  |  GPIO Out: {len(gout)}  |  Logic Gates: {len(lsrc)+len(ldst)}  |  Logic Lines: {len(lline)}", max_col=7)
+                 f"GPIO In: {len(gin)}  |  GPIO Out: {len(gout)}  |  Logic Gates: {len(lsrc)+len(ldst)+len(monos)}  |  Logic Lines: {len(lline)}", max_col=7)
 
-    headers = ["#", "Type", "Channel / Pin #", "Label / Name", "Inverted / NC", "Channel Selection / Off-Delay", "Host Device"]
+    headers = ["#", "Type", "Channel / Pin #", "Label / Name", "Configuration / Mode", "Signal / Off-Delay / Trigger", "Host Device"]
     header_row(ws, 4, headers, bg=C['teal'])
 
     row_count = 5
@@ -809,6 +945,52 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
         write_cell(ws, row_count, 7, p_name, bg=bg)
         row_count += 1
 
+    # Logic Sources
+    for s in lsrc:
+        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
+        ws.row_dimensions[row_count].height = 20
+        src_type = s.get('src_type_name') or f"Type {s.get('src_type', 0)}"
+        ch2_str = "2nd Ch" if s.get('second_audio_channel') else "Normal"
+        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
+        write_cell(ws, row_count, 2, "Logic Source", bg=bg, bold=True)
+        write_cell(ws, row_count, 3, f"Type: {src_type}", bg=bg, align="center")
+        write_cell(ws, row_count, 4, s.get('name') or s.get('label', ''), bg=bg)
+        write_cell(ws, row_count, 5, ch2_str, bg=bg, align="center")
+        write_cell(ws, row_count, 6, f"Ref: {s.get('src_ref', '—')}", bg=bg, align="center")
+        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
+        row_count += 1
+
+    # Logic Destinations
+    for d in ldst:
+        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
+        ws.row_dimensions[row_count].height = 20
+        act = f"Active: {d.get('active_inputs', 0)}" if 'active_inputs' in d else ""
+        nact = f"NotActive: {d.get('not_active_inputs', 0)}" if 'not_active_inputs' in d else ""
+        trig = ', '.join(filter(None, [act, nact])) or "—"
+        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
+        write_cell(ws, row_count, 2, "Logic Destination", bg=bg, bold=True)
+        write_cell(ws, row_count, 3, "Gate Dst", bg=bg, align="center")
+        write_cell(ws, row_count, 4, d.get('name') or d.get('label', ''), bg=bg)
+        write_cell(ws, row_count, 5, "—", bg=bg, align="center")
+        write_cell(ws, row_count, 6, trig, bg=bg, align="center")
+        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
+        row_count += 1
+
+    # Monoflop Gates
+    for m in monos:
+        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
+        ws.row_dimensions[row_count].height = 20
+        retrig = "Retrigger Extends" if m.get('retrigger_extends_time') else "Fixed Pulse"
+        time_str = f"Time: {m.get('monoflop_time', 0)} ms"
+        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
+        write_cell(ws, row_count, 2, "Monoflop Gate", bg=bg, bold=True)
+        write_cell(ws, row_count, 3, "Timer Gate", bg=bg, align="center")
+        write_cell(ws, row_count, 4, m.get('name', ''), bg=bg)
+        write_cell(ws, row_count, 5, retrig, bg=bg, align="center")
+        write_cell(ws, row_count, 6, time_str, bg=bg, align="center")
+        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
+        row_count += 1
+
     # Logic Lines
     for l in lline:
         bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
@@ -822,6 +1004,7 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
         write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
         row_count += 1
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -859,6 +1042,7 @@ def build_trunks_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 9, t.get('trunk_address', 0), bg=bg, align="center")
         write_cell(ws, r_idx, 10, codec, bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -888,6 +1072,7 @@ def build_users_sheet(wb, h, recs, byid):
         write_cell(ws, r_idx, 6, pwd, bg=bg, align="center")
         write_cell(ws, r_idx, 7, perms, bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -926,6 +1111,7 @@ def build_scheduler_sheet(wb, h, recs, byid):
             write_cell(ws, r_idx, 7, str(t.get('year', '*')), bg=bg, align="center")
             write_cell(ws, r_idx, 8, ev_name, bg=bg)
 
+    ws.freeze_panes = 'A5'
     auto_width(ws)
 
 
@@ -942,6 +1128,7 @@ def export_art_to_excel(art_file_path, output_path=None):
     data = path.read_bytes()
     h, recs = A.parse_art(data)
     byid = {r['id']: r for r in recs}
+    target_row_map = compute_target_row_map(recs)
 
     if output_path is None:
         output_path = path.with_suffix('.xlsx')
@@ -957,7 +1144,7 @@ def export_art_to_excel(art_file_path, output_path=None):
     build_nodes_sheet(wb, h, recs, byid)
     build_cards_sheet(wb, h, recs, byid)
     build_ports_sheet(wb, h, recs, byid)
-    build_panels_keys_sheet(wb, h, recs, byid)
+    build_panels_keys_sheet(wb, h, recs, byid, target_row_map=target_row_map)
     build_conferences_sheet(wb, h, recs, byid)
     build_groups_sheet(wb, h, recs, byid)
     build_ifb_sheet(wb, h, recs, byid)
