@@ -1318,6 +1318,9 @@ def read_port(ar, o, pool_state=0):
             sub = ar.u8()
             if v >= 0x320 and sub:
                 o['port_214'] = ar.u8() - 1
+                # +0x214: which network interface of the card the port's streams use; the 'PortAes67Trunkline'
+                # property (FUN_00cb9d00 case 12) passes it to FUN_00c0e180, which picks pair member 0 / 1
+                o['media_interface'] = {0: 'Media 1', 1: 'Media 2'}.get(o['port_214'], 'none')
             if sub & 1:
                 o['audio_settings'] = read_port_c0d420(ar)
             if v > 0x6f:
