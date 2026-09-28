@@ -46,12 +46,13 @@ def detect_file_type(file_bytes, filename=""):
 
 def export_artist_file(path, out_dir=None, fmt='excel', validate_only=False):
     """Process an Artist .Art save file."""
+    path = pathlib.Path(path)
     t0 = time.time()
     data = path.read_bytes()
     h, recs = A.parse_art(data)
     byid = {r['id']: r for r in recs}
 
-    nodes = [r for r in recs if r['class'] in (1, 2, 3, 4, 5, 6, 7, 8)]
+    nodes = [r for r in recs if r['class'] == 3]          # CPhysNode frames
     ports = [r for r in recs if r['class'] in A.PORT_TYPE_NAMES]
     keys = [r for r in recs if r['class'] == 9 and r.get('commands')]
     confs = [r for r in recs if r['class'] == 0x12]
@@ -108,6 +109,7 @@ def export_artist_file(path, out_dir=None, fmt='excel', validate_only=False):
 
 def export_bolero_file(path, out_dir=None, fmt='excel', validate_only=False):
     """Process a Bolero .bol save file."""
+    path = pathlib.Path(path)
     t0 = time.time()
     if not HAS_BOLERO:
         raise RuntimeError("bol_faithful.py not available in environment.")
@@ -147,7 +149,7 @@ def export_bolero_file(path, out_dir=None, fmt='excel', validate_only=False):
     # Excel export
     if fmt in ('excel', 'all'):
         xlsx_path = target_dir / f"{base_name}.xlsx"
-        B.export_to_excel(res, str(xlsx_path))
+        B.export_to_excel(str(path), str(xlsx_path))   # export_to_excel parses the file itself
         created_files.append(str(xlsx_path))
 
     # JSON export
@@ -165,6 +167,7 @@ def correlate_artist_and_bolero(files, out_dir=None, fmt='excel'):
     Cross-references Bolero beltpack assignments across Artist (.Art) save files
     and Bolero (.bol) save files. Analyzes User IDs, label mappings, and IP multicasts.
     """
+    files = [pathlib.Path(f) for f in files]
     artist_files = [f for f in files if f.suffix.lower() == '.art']
     bolero_files = [f for f in files if f.suffix.lower() == '.bol']
 

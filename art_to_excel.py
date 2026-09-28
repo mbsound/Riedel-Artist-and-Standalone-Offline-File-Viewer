@@ -144,49 +144,103 @@ def auto_width(ws, extra=3, max_w=65):
     ws.views.sheetView[0].showGridLines = True
 
 
+LOGIC_CLASSES = (0x040, 0x041, 0x042, 0x087) + tuple(A.LOGIC_GATE_NAMES)
+
+
+def _port_name(byid, pid):
+    """Readable name for a port id; ids 0 / 0xffffffff / missing mean no destination."""
+    if pid in (None, 0, 0xffffffff, -1):
+        return '(no destination)'
+    t = byid.get(pid)
+    if not t:
+        return f"Port ID {pid}"
+    return t.get('port_str') or t.get('name') or f"Port ID {pid}"
+
+
+def _obj_name(byid, oid, what):
+    if oid in (None, 0, 0xffffffff, -1):
+        return f'(no {what})'
+    o = byid.get(oid)
+    if not o:
+        return f"{what.title()} ID {oid}"
+    return o.get('long_name') or o.get('label') or o.get('name') or f"{what.title()} ID {oid}"
+
+
+def _trunk_or_port(cmd, byid):
+    """Talk / Listen targets: a trunked command has no local port, only a trunk address and name."""
+    if cmd.get('target') in (None, 0, 0xffffffff, -1) and (cmd.get('trunk_name') or cmd.get('trunk_port_address')):
+        return f"Trunk: {cmd.get('trunk_name') or ''} (net {cmd.get('trunk_net_address')}, port {cmd.get('trunk_port_address')})"
+    return _port_name(byid, cmd.get('target'))
+
+
 def format_command(cmd, byid):
+    """(function name, target text, priority, (link kind, id) or None) for one command record."""
     if not cmd:
         return 'Empty', '', '', None
     cls = cmd.get('class', 0)
     prio = cmd.get('priority', '')
-    if cls == 0x13:  # Call to Port
-        target = byid.get(cmd.get('target'))
-        name = target.get('port_str') or target.get('name') if target else f"Port ID {cmd.get('target')}"
-        label = target.get('name', '') if target else ''
-        return 'Call to Port', name, prio, ('port', cmd.get('target'))
-    elif cls == 0x14:  # Listen to Port
-        target = byid.get(cmd.get('target'))
-        name = target.get('port_str') or target.get('name') if target else f"Port ID {cmd.get('target')}"
-        label = target.get('name', '') if target else ''
-        return 'Listen to Port', name, prio, ('port', cmd.get('target'))
-    elif cls == 0x16:  # Conference
-        conf = byid.get(cmd.get('conference'))
-        name = conf.get('long_name') or conf.get('label') if conf else f"Conf ID {cmd.get('conference')}"
-        return 'Conference', name, prio, ('conf', cmd.get('conference'))
-    elif cls in (0x17, 0x12):  # Group
-        grp = byid.get(cmd.get('group'))
-        name = grp.get('long_name') or grp.get('label') if grp else f"Group ID {cmd.get('group')}"
-        return 'Group', name, prio, ('group', cmd.get('group'))
-    elif cls == 0x18:  # Reply
+    if cls == 0x13:
+        return 'Call to Port', _trunk_or_port(cmd, byid), prio, ('port', cmd.get('target'))
+    if cls == 0x14:
+        return 'Listen to Port', _trunk_or_port(cmd, byid), prio, ('port', cmd.get('target'))
+    if cls == 0x16:
+        return 'Conference', _obj_name(byid, cmd.get('conference'), 'conference'), prio, ('conf', cmd.get('conference'))
+    if cls == 0x17:
+        gid = cmd.get('target_group', cmd.get('group'))
+        return 'Group', _obj_name(byid, gid, 'group'), prio, ('group', gid)
+    if cls == 0x18:
         return 'Reply', '<REPLY>', prio, None
-    elif cls == 0x67:  # Call to IFB
-        ifb = byid.get(cmd.get('ifb'))
-        name = ifb.get('long_name') or ifb.get('label') if ifb else f"IFB ID {cmd.get('ifb')}"
-        return 'Call to IFB', name, prio, ('ifb', cmd.get('ifb'))
-    elif cls == 0x15:  # Route Audio
-        src = byid.get(cmd.get('source'))
-        dst = byid.get(cmd.get('dest'))
-        src_name = src.get('name') if src else str(cmd.get('source'))
-        dst_name = dst.get('name') if dst else str(cmd.get('dest'))
-        return 'Route Audio', f"{src_name} -> {dst_name}", prio, None
-    elif cls == 0x44:  # Logic
-        log = byid.get(cmd.get('logic'))
-        name = log.get('name') if log else cmd.get('cmd_name', '')
-        return 'Logic', name or f"Logic ID {cmd.get('logic')}", prio, None
-    elif cls == 0x70:  # Audio Patch
-        return 'Audio Patch', cmd.get('cmd_name', 'Audio Patch'), prio, None
-    else:
-        return f"Cmd 0x{cls:02x}", cmd.get('cmd_name', ''), prio, None
+    if cls == 0x67:
+        return 'Call to IFB', _obj_name(byid, cmd.get('ifb'), 'IFB'), prio, ('ifb', cmd.get('ifb'))
+    if cls == 0x0a:
+        src = _port_name(byid, cmd.get('source'))
+        dst = _port_name(byid, cmd.get('destination'))
+        return 'Route Audio', f"{src} -> {dst}", prio, None
+    if cls == 0x15:
+        return 'GPIO', _obj_name(byid, cmd.get('gpio'), 'GPIO'), prio, None
+    if cls == 0x44:
+        return 'Logic', _obj_name(byid, cmd.get('logic'), 'logic destination'), prio, None
+    if cls == 0x25:
+        return 'Select Audiopatch', _obj_name(byid, cmd.get('audiopatch'), 'audio patch'), prio, None
+    if cls == 0x26:
+        key = byid.get(cmd.get('target_key'))
+        acts = [n for f, n in (('press_key', 'press'), ('press_key_lever_up', 'lever up'), ('lock_key', 'lock'),
+                               ('set_signaling_marker', 'marker'), ('set_key_text', 'text')) if cmd.get(f)]
+        name = (key.get('label') if key else f"Key ID {cmd.get('target_key')}") or '(key)'
+        return 'Remote Key', f"{name} ({', '.join(acts) or 'no action'})", prio, None
+    if cls == 0x30:
+        return 'Edit Conference', '', prio, None
+    if cls == 0x31:
+        return 'Control Audiopatch', f"{_port_name(byid, cmd.get('target'))} ({cmd.get('key_function', '')})", prio, None
+    if cls == 0x32:
+        return 'Edit IFB', '', prio, None
+    if cls == 0x33:
+        return 'Dim Speaker', f"{_port_name(byid, cmd.get('target'))} by {cmd.get('dim_speaker_by', '')}", prio, None
+    if cls == 0x34:
+        src = _port_name(byid, cmd.get('source'))
+        dst = _port_name(byid, cmd.get('destination'))
+        return 'Dim Level', f"{src} -> {dst} ({cmd.get('dim_value', '')})", prio, None
+    if cls == 0x35:
+        return 'Beep', _port_name(byid, cmd.get('target')), prio, None
+    if cls == 0x36:
+        return 'Telephone Dial / Hang up', cmd.get('dial_function', ''), prio, None
+    if cls == 0x49:
+        return 'Telephone Keypad', cmd.get('keypad_function', ''), prio, None
+    if cls == 0x4d:
+        return 'Kill Mic', '', prio, None
+    if cls == 0x4e:
+        return 'Auto-Listen Off', '', prio, None
+    if cls == 0x4f:
+        return 'Set Input/Output Gain', _port_name(byid, cmd.get('target')), prio, None
+    if cls == 0x5e:
+        return 'Sidetone', cmd.get('norm_sidetone_level', ''), prio, None
+    if cls == 0x5f:
+        return 'Send String', cmd.get('send_text', ''), prio, None
+    if cls == 0x6b:
+        return 'Hot Mic', _port_name(byid, cmd.get('target')), prio, None
+    if cls == 0x503:
+        return 'Clone Output Port', f"{_port_name(byid, cmd.get('source'))} -> {_port_name(byid, cmd.get('dest'))}", prio, None
+    return f"Cmd 0x{cls:02x}", cmd.get('cmd_name', ''), prio, None
 
 
 def compute_target_row_map(recs):
@@ -198,7 +252,7 @@ def compute_target_row_map(recs):
     sorted_ports = sorted(ports, key=lambda p: (p.get('port_number', 0), p.get('port_index', 0)))
     confs = sorted([r for r in recs if r['class'] == 0x012], key=lambda c: c.get('label', ''))
     groups = sorted([r for r in recs if r['class'] == 0x011], key=lambda g: g.get('label', ''))
-    ifbs = sorted([r for r in recs if r['class'] == 0x066], key=lambda i: i.get('ifb_index', 0))
+    ifbs = sorted([r for r in recs if r['class'] == 0x066], key=lambda i: i.get('ifb_number', 0))
 
     tmap = {}
     for idx, p in enumerate(sorted_ports, 5):
@@ -263,7 +317,7 @@ def build_summary_sheet(wb, h, recs, byid, filepath):
         ("Production Audio", "Audio Patches (DSP Matrices)", len(patches), "Per-panel mixing matrices and filter chains"),
         ("Control & Automation", "GPIO Input Channels", len([r for r in recs if r['class'] == 0x00c]), "Hardware opto-isolated GPI inputs"),
         ("Control & Automation", "GPIO Output Channels", len([r for r in recs if r['class'] == 0x00d]), "Hardware relay output GPI channels"),
-        ("Control & Automation", "Logic Functions & Lines", len([r for r in recs if r['class'] in (0x00a, 0x00b, 0x005)]), "Internal matrix logic sources, gates & lines"),
+        ("Control & Automation", "Logic Functions & Lines", len([r for r in recs if r['class'] in LOGIC_CLASSES]), "Internal matrix logic sources, gates & lines"),
         ("Security & Access", "User Accounts", len(users), "Configured administrator & operator accounts"),
     ]
 
@@ -901,13 +955,15 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
     ws = wb.create_sheet(title="Logic & GPIO")
     gin = [r for r in recs if r['class'] == 0x00c]
     gout = [r for r in recs if r['class'] == 0x00d]
-    lsrc = [r for r in recs if r['class'] == 0x00a]
-    ldst = [r for r in recs if r['class'] == 0x00b]
-    lline = [r for r in recs if r['class'] == 0x005]
+    lsrc = [r for r in recs if r['class'] == 0x040]
+    ldst = [r for r in recs if r['class'] == 0x041]
+    lline = [r for r in recs if r['class'] == 0x042]
     monos = [r for r in recs if r['class'] == 0x086]
+    gates = [r for r in recs if r['class'] in A.LOGIC_GATE_NAMES and r['class'] != 0x086]
+    clocks = [r for r in recs if r['class'] == 0x087]
 
     title_banner(ws, "Hardware GPIO Channels & Internal Matrix Logic",
-                 f"GPIO In: {len(gin)}  |  GPIO Out: {len(gout)}  |  Logic Gates: {len(lsrc)+len(ldst)+len(monos)}  |  Logic Lines: {len(lline)}", max_col=7)
+                 f"GPIO In: {len(gin)}  |  GPIO Out: {len(gout)}  |  Logic Sources: {len(lsrc)}  |  Destinations: {len(ldst)}  |  Gates: {len(gates)+len(monos)}  |  Logic Lines: {len(lline)}", max_col=7)
 
     headers = ["#", "Type", "Channel / Pin #", "Label / Name", "Configuration / Mode", "Signal / Off-Delay / Trigger", "Host Device"]
     header_row(ws, 4, headers, bg=C['teal'])
@@ -935,7 +991,7 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
         p = byid.get(g.get('panel'))
         p_name = p.get('name') if p else f"Panel {g.get('panel')}"
         nc_str = "NC" if g.get('normally_closed') else "NO"
-        off_del = f"Off-Delay: {g.get('off_delay')} ms" if g.get('off_delay') else "None"
+        off_del = f"Off-Delay: {g.get('off_delay')} ms" if g.get('off_delay') else "No off-delay"
         write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
         write_cell(ws, row_count, 2, "GPIO Out", bg=bg, bold=True)
         write_cell(ws, row_count, 3, f"Out {g.get('gpio_index', 0) + 1}", bg=bg, align="center")
@@ -964,8 +1020,8 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
     for d in ldst:
         bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
         ws.row_dimensions[row_count].height = 20
-        act = f"Active: {d.get('active_inputs', 0)}" if 'active_inputs' in d else ""
-        nact = f"NotActive: {d.get('not_active_inputs', 0)}" if 'not_active_inputs' in d else ""
+        act = f"Active: {len(d.get('active_inputs') or [])}" if 'active_inputs' in d else ""
+        nact = f"NotActive: {len(d.get('not_active_inputs') or [])}" if 'not_active_inputs' in d else ""
         trig = ', '.join(filter(None, [act, nact])) or "—"
         write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
         write_cell(ws, row_count, 2, "Logic Destination", bg=bg, bold=True)
@@ -988,6 +1044,30 @@ def build_logic_gpio_sheet(wb, h, recs, byid):
         write_cell(ws, row_count, 4, m.get('name', ''), bg=bg)
         write_cell(ws, row_count, 5, retrig, bg=bg, align="center")
         write_cell(ws, row_count, 6, time_str, bg=bg, align="center")
+        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
+        row_count += 1
+
+    # Logic Gates (AND / OR / NOT / ...) and clocks
+    for g in gates:
+        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
+        ws.row_dimensions[row_count].height = 20
+        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
+        write_cell(ws, row_count, 2, "Logic Gate", bg=bg, bold=True)
+        write_cell(ws, row_count, 3, g.get('gate_type', ''), bg=bg, align="center")
+        write_cell(ws, row_count, 4, g.get('name', ''), bg=bg)
+        write_cell(ws, row_count, 5, f"Inputs: {len(g.get('inputs') or [])}", bg=bg, align="center")
+        write_cell(ws, row_count, 6, f"Outputs: {len(g.get('outputs') or [])}", bg=bg, align="center")
+        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
+        row_count += 1
+    for c in clocks:
+        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
+        ws.row_dimensions[row_count].height = 20
+        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
+        write_cell(ws, row_count, 2, "Logic Clock", bg=bg, bold=True)
+        write_cell(ws, row_count, 3, "Clock", bg=bg, align="center")
+        write_cell(ws, row_count, 4, c.get('name', ''), bg=bg)
+        write_cell(ws, row_count, 5, "—", bg=bg, align="center")
+        write_cell(ws, row_count, 6, "—", bg=bg, align="center")
         write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
         row_count += 1
 
@@ -1159,29 +1239,50 @@ def export_art_to_excel(art_file_path, output_path=None):
     return output_path
 
 
+USAGE = """usage: python art_to_excel.py [-o OUTPUT] [FILE.Art ...]
+
+  FILE.Art   one or more Artist saves (default: every .Art under ..)
+  -o OUTPUT  output .xlsx for a single input, or an existing folder for several inputs
+  -h, --help show this help and exit (nothing is written)"""
+
+
 if __name__ == '__main__':
     out_opt = None
     args = []
-    skip = False
-    for i, a in enumerate(sys.argv[1:], 1):
-        if skip:
-            skip = False
-            continue
+    argv = sys.argv[1:]
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ('-h', '--help'):
+            print(USAGE)
+            sys.exit(0)
         if a == '-o':
-            skip = True
-            if i < len(sys.argv):
-                out_opt = sys.argv[i + 1]
-        elif not a.startswith('-'):
-            args.append(a)
+            if i + 1 >= len(argv):
+                sys.exit('error: -o needs an output path\n\n' + USAGE)
+            out_opt = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith('-'):
+            sys.exit('error: unknown option %s\n\n%s' % (a, USAGE))
+        args.append(a)
+        i += 1
 
     if not args:
         # Default: process all .Art files in parent and current directory
         files = sorted(set(glob.glob('../*.Art') + glob.glob('../**/*.Art', recursive=True)))
+        if out_opt and not os.path.isdir(out_opt):
+            sys.exit('error: with several inputs, -o must be an existing folder')
         for f in files:
             try:
-                export_art_to_excel(f)
+                target = os.path.join(out_opt, pathlib.Path(f).stem + '.xlsx') if out_opt else None
+                export_art_to_excel(f, target)
             except Exception as e:
                 print(f"Error converting {f}: {e}")
     else:
+        if len(args) > 1 and out_opt and not os.path.isdir(out_opt):
+            sys.exit('error: with several inputs, -o must be an existing folder')
         for f in args:
-            export_art_to_excel(f, out_opt)
+            target = out_opt
+            if out_opt and os.path.isdir(out_opt):
+                target = os.path.join(out_opt, pathlib.Path(f).stem + '.xlsx')
+            export_art_to_excel(f, target)

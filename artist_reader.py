@@ -2262,8 +2262,14 @@ def read_logic_line(ar, o):
     o['points'] = [(ar.i32(), ar.i32()) for _ in range(ar.u32())]
 
 
+# Logic gate class -> type (RTTI class names; class code from vtable slot 0x30).
+LOGIC_GATE_NAMES = {0x43: 'AND', 0x45: 'OR', 0x46: 'NOT', 0x47: 'Split', 0x80: 'NOP', 0x81: 'NOR', 0x82: 'XOR',
+                    0x83: 'XNOR', 0x84: 'NAND', 0x85: 'D-Flip-Flop', 0x86: 'Mono-Flop'}
+
+
 def read_logic_gate(ar, o):
     """CPhysLogicGate (AND/OR/NOT/split/NOP/NOR/XOR/XNOR/NAND/D-flip-flop/mono-flop) FUN_00c82440."""
+    o['gate_type'] = LOGIC_GATE_NAMES.get(o.get('class'), 'gate 0x%x' % o.get('class', 0))
     if ar.version < 0x2b:
         skip_counted(ar)
     o['rect'] = [ar.u32() for _ in range(4)]
