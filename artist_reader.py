@@ -2150,6 +2150,14 @@ def read_virtfn(ar, o):
 
 # ----- logic --------------------------------------------------------------------------------
 LOGIC_SRC_TYPES_NO_REF = (1, 8, 9, 10, 0xc, 0xd, 0xe, 0xf)
+# Logic source type (+0x90) -> Director's name (description FUN_00c87dd0; strings built at startup, 0x12fc1d4..).
+# Types 2..0x10 belong to the Master Control Room (out of scope, named for completeness).
+LOGIC_SRC_TYPE_NAMES = {0: 'Logic Source <invalid>', 1: 'Logic Source', 2: 'MCR Member', 3: 'MCR Conference',
+                        4: 'MCR Monitor In', 5: 'MCR Monitor Out', 6: 'MCR Monitor Mute',
+                        7: 'MCR Monitor Microphone', 8: 'MCR Send Changes (Update)', 9: 'MCR Remove All',
+                        10: 'MCR Discard Changes', 0xb: 'MCR Monitor Port', 0xc: 'MCR Monitor In',
+                        0xd: 'MCR Monitor Out', 0xe: 'MCR Monitor Microphone', 0xf: 'MCR Monitor Mute',
+                        0x10: 'MCR Monitor'}
 
 
 def read_logic_src(ar, o):
@@ -2161,9 +2169,13 @@ def read_logic_src(ar, o):
     o['label'] = ar.wstring() if v < 0x43 else ar.string()
     if v >= 0x2d:
         f = ar.u8()
+        # bit 0: +0x9c "2nd audio channel" (saved only for type 0x0b, MCR Monitor Port); bit 1: +0x8c, reserved
+        # (initialised 0, no setter in 8.9). 'invert' is the old, wrong name for bit 0, kept as an alias.
         o['invert'], o['src_flag'] = f & 1, (f >> 1) & 1
+        o['second_audio_channel'] = bool(f & 1)
     if v >= 0x2a:
         o['src_type'] = ar.u8()
+        o['src_type_name'] = LOGIC_SRC_TYPE_NAMES.get(o['src_type'], 'type %d' % o['src_type'])
         o['src_ref'] = ar.u32()                          # meaning depends on src_type
 
 
