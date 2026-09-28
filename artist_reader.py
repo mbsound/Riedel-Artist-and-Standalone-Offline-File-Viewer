@@ -1117,9 +1117,9 @@ PANEL_23XX = (0x434, 0x435, 0x436, 0x443, 0x444)     # RSP-2318 Pro/Plus/Basic, 
 
 
 def read_gpio_ref(ar, o, prefix):
-    """GPIO output reference + trigger union (same encoding as CPhysCmdGpio). Director 8.9 keeps only the
-    GPIO id: the trigger data after it (old u16 + 5 bytes, or the newer kind/ref/port union) is read into
-    scratch variables and dropped (FUN_00c3cf40)."""
+    """GPIO output reference + trigger union (same encoding as CPhysCmdGpio). The GPIO command loader
+    (FUN_00c3cf40) keeps only the GPIO id and drops the trigger data after it (old u16 + 5 bytes, or the
+    newer kind/ref/port union); other owners' loaders not checked."""
     v = ar.version
     o[prefix] = gid = ar.u32()
     if v > 0x13:
