@@ -1887,15 +1887,21 @@ def read_scroll_list(ar, o):
         raise ArtFormatError('scroll list before 0x42 not implemented')
     entries = []
     for _ in range(ar.u16()):
+        # Entry fields (loader FUN_00cc6f30; "Edit Scroll List entry" dialog 222, init FUN_009b7230)
         e = {'command': ar.u32()}
         w = ar.u16()
         e['flags'] = w
-        e['u8'] = ar.u8()
+        e['auto_label'] = bool(w & 2)                    # "Define automatically" (entry +0xf bit 7)
+        e['dim_speaker'] = bool(w & 0x20)                # "Dim the panel speaker when this key is activated"
+        e['key_mode'] = KEY_MODE_NAMES.get((w >> 6) & 3, 'value %d' % ((w >> 6) & 3))   # Key Mode combo index
+        e['u8'] = ar.u8()                                # +0xd: reserved (the dialog's OK clears it)
         e['label'] = ar.string()
         if v >= 0x2c:
-            e['u8b'] = ar.u8()
+            e['u8b'] = ar.u8()                           # +0xe: Latching Timeout combo index
+            e['latching_timeout'] = _pick(LATCHING_TIMEOUTS, e['u8b'])
         if v >= 0x2f:
-            e['i16'] = ar.i16()
+            e['i16'] = ar.i16()                          # +0x14: Keypad shortcut, -1 = none
+            e['keypad_shortcut'] = None if e['i16'] == -1 else e['i16'] & 0xffff
         entries.append(e)
     o['entries'] = entries
     if v > 0x2f:
@@ -2200,6 +2206,8 @@ def read_logic_monoflop(ar, o):
     """CPhysLogicGateMonoFlop (0x86) FUN_00c845a0: pulse time + retrigger flag, then the gate."""
     o['monoflop_time'] = ar.u32()
     o['monoflop_flag'] = ar.u8() & 1
+    # the Monoflop "General" page (dialog 451) has Duration and a single checkbox, "Retrigger extends time"
+    o['retrigger_extends_time'] = bool(o['monoflop_flag'])
     read_logic_gate(ar, o)
 
 
