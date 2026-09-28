@@ -193,3 +193,10 @@ Suggested method:
 - Find the object's dialog in `docs/director_ddx.txt`.
 - Its OK handler maps `obj+OFF` to the control. To locate it, byte-scan for the disp32 write, like the Monitor Defaults fix.
 - Place controls by template geometry, not by the DDX label guess.
+
+## 8. To verify: swatch colour values (Claude, next session)
+
+`SWATCH_COLORS` in `artist_reader.py` (names plus hex RGB for group-colour indices 0–15, 16 = none) was added by Gemini, and its source isn't cited. The index is certain; the names and hex shades are not verified.
+- **Code check:** find Director's swatch palette (the colour table the key and group colour pickers draw from; search for a 16-entry COLORREF table or the picker's fill code) and compare every entry.
+- **Save check:** set a few keys to known swatches in Director, save, export, and compare the Excel fills with what Director shows.
+- **After fixing:** cite the palette's address next to `SWATCH_COLORS`, the same way the other tables cite theirs.
