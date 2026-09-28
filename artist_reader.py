@@ -213,18 +213,30 @@ def read_web(ar, o):
     o['name'] = ar.wstring() if ar.version < 0x30 else ar.string()
     o['demo_marker'] = ar.u32()           # 0xFEEDFEED = demo configuration (Director refuses to open)
     o['web_u32_a'] = ar.u32()             # written as 1
+    # Root "General" page (dialog 109, init FUN_00da0c60): Name, Trunking / Stage net address, Stage URLs
     o['web_7ad90'] = ar.u32() if ar.version >= 0x29 else 0
+    o['trunking_net_address'] = o['web_7ad90']          # +0x7ad90 (0 disables Trunking)
     if ar.version >= 0x530:
         o['web_7ad94'] = ar.u32()
+        o['stage_net_address'] = o['web_7ad94']         # +0x7ad94 (0 disables Stage)
         o['web_str_a'] = ar.string()
+        o['stage_registration_url'] = o['web_str_a']    # +0x7ad98
     if ar.version >= 0x535:
         o['web_str_b'] = ar.string()
+        o['stage_base_url'] = o['web_str_b']            # +0x7ad9c ("Stage base url is empty")
     if ar.version >= 0x2c:
         f = ar.u32()
         o['web_flags'] = f                # bits 0..2 -> +0x8c/+0x8d/+0x8e
     elif ar.version > 0x10:
-        o['web_flags'] = ar.u32()
+        o['web_flags'] = f = ar.u32()
+    else:
+        f = 0
+    # "Allow more ... than the standard maximum" options (page init FUN_00d5d4b0, store FUN_00d5d360)
+    o['allow_more_logic_sources_per_destination'] = bool(f & 1)
+    o['allow_more_logic_destinations_per_node'] = bool(f & 2)
+    o['allow_more_members_per_conference'] = bool(f & 4)
     o['web_ids_a'] = u32_list(ar)         # object ids (+0x6efe4 array)
+    o['nets'] = o['web_ids_a']            # the CPhysNet records
     o['web_ids_b'] = u32_list(ar)         # written empty
     if ar.version >= 0x13:
         o['web_list_c'] = u32_list(ar)    # +0x6f1b0
