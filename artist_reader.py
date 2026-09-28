@@ -1176,9 +1176,14 @@ def read_port_stream(ar, with_u16b):
     if with_u16b and v >= 0x1d0:
         s['u8f'] = ar.u8()
     if v >= 0x200:
-        s['u32c'] = ar.u32()
+        s['u32c'] = ar.u32()     # +0x20 linked port id (FUN_00a495e0: "This port is linked to a not existing port!")
     if v >= 0x370:
-        s['bytes16'] = ar._take(16).hex()
+        s['bytes16'] = ar._take(16).hex()   # stream UUID (created by FUN_00c09250 / FUN_00c0bbc0; NMOS id)
+    s['linked_port'] = s.get('u32c', 0)
+    s['linked_port_number'] = s.get('u16c', 0)          # +0x1e, reset together with the linked port
+    if 'bytes16' in s:
+        u = s['bytes16']
+        s['stream_uuid'] = '-'.join((u[:8], u[8:12], u[12:16], u[16:20], u[20:]))
     # Names from FUN_00cb9dc0 (stream block offsets in brackets).
     s['packet_time'], s['payload_type'], s['bit_depth'] = s['u16'], s['u8a'], s['u8b']   # +0xe +0xc +0xd
     s['ssrc'], s['timestamp_offset'] = s['u32a'], s['u32b']                           # +0x10 +0x14
@@ -1190,8 +1195,8 @@ def read_port_stream(ar, with_u16b):
             sfx = '' if n == 0 else '_2'
             if with_u16b:        # receive: source IP, multicast IP, port, RTSP URI
                 s['source_ip' + sfx], s['multicast' + sfx], s['multicast_port' + sfx], s['rtsp_uri' + sfx] = st
-            else:                # send: multicast IP, port, name
-                s['multicast' + sfx], s['multicast_port' + sfx] = st[0], st[1]
+            else:                # send: multicast IP, port, RTSP URI
+                s['multicast' + sfx], s['multicast_port' + sfx], s['rtsp_uri' + sfx] = st
     return s
 
 
