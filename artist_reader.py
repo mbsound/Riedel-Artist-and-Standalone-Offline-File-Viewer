@@ -373,6 +373,7 @@ def read_aes67_ptp(ar, o):
                     'extra': p['s2']}                    # +0x18: not shown on the page
 
 
+PLAY_MODES = ['synton', 'synchron']                  # Play Mode combo, FUN_009ba1b0 item data 0 / 1
 PTP_MODES = ['multicast', 'hybrid']                  # PTP (Communication) Mode, FUN_009b8fa0 item data
 PTP_ROLES = ['automatic', 'TimeReceiver']            # PTP Role, FUN_009b9fd0 item data
 PTP_FIELDS = ('domain', 'priority2', 'mode', 'role', 'announce_interval', 'sync_interval',
@@ -1174,6 +1175,8 @@ def read_port_c0d420(ar):
     if len(s['streams']) > 1:
         s['ip_address_2'], s['listen_port_2'] = s['streams'][1][0], s['streams'][1][1]
     s['packet_time'], s['receive_buffer'], s['play_mode'] = s['u16a'], s.get('u16b'), s.get('u8b')
+    if s['play_mode'] is not None:
+        s['play_mode_name'] = _pick(PLAY_MODES, s['play_mode'])
     return s
 
 
@@ -1211,6 +1214,8 @@ def read_port_stream(ar, with_u16b):
     s['protocol'], s['channels'], s['selection'] = s['u8c'], s['u8d'], s['u8e']       # +0x18 +0x19 +0x1a
     if with_u16b:
         s['receive_buffer'], s['play_mode'] = s.get('u16d'), s.get('u8f')             # +0x1c +0x24
+        if s['play_mode'] is not None:
+            s['play_mode_name'] = _pick(PLAY_MODES, s['play_mode'])
     if v >= 0x320:
         for n, st in enumerate(s['streams']):
             sfx = '' if n == 0 else '_2'
@@ -2510,7 +2515,7 @@ def read_nsa_device(ar, o):
     o['nsa_i32'] = ar.i32()                              # +0xb0: IP address WebUI
     o['webui_ip'] = o['nsa_i32']
     o['nsa_bytes'] = nb = list(ar._take(3))              # +0xc2 Play Mode, +0xc3 PTP Role, +0xc4 Receive Buffer (ms)
-    o['play_mode'] = _pick(['synton', 'synchron'], nb[0])
+    o['play_mode'] = _pick(PLAY_MODES, nb[0])
     o['ptp_role'] = _pick(PTP_ROLES, nb[1])
     o['receive_buffer_ms'] = nb[2]
     o['gpio_in'] = [ar.u32() for _ in range(ar.u16())]
