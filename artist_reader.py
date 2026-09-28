@@ -237,17 +237,19 @@ def read_web(ar, o):
     o['allow_more_members_per_conference'] = bool(f & 4)
     o['web_ids_a'] = u32_list(ar)         # object ids (+0x6efe4 array)
     o['nets'] = o['web_ids_a']            # the CPhysNet records
-    o['web_ids_b'] = u32_list(ar)         # written empty
+    o['web_ids_b'] = u32_list(ar)         # written empty (both id lists are skipped by the loader)
     if ar.version >= 0x13:
-        o['web_list_c'] = u32_list(ar)    # +0x6f1b0
+        o['web_list_c'] = u32_list(ar)    # +0x6f1b0: random ids issued by FUN_00cd5870 (kept so they are not reused)
+        o['issued_ids'] = o['web_list_c']
     if ar.version >= 0x18:
         entries = []
         for _ in range(ar.u32()):
             name = ar.wstring()
             a = u32_list(ar)
             b = u32_list(ar)
-            entries.append({'name': name, 'a': a, 'b': b})
+            entries.append({'name': name, 'a': a, 'b': b})   # a / b: CPhysPanel ids (FUN_00a048f0)
         o['web_named_lists'] = entries
+        o['setups'] = entries             # "Setups" (max 20; FUN_00a04640), each a name + two panel lists
 
 
 # ----- cards (CPhysClient*) -----------------------------------------------------------------
