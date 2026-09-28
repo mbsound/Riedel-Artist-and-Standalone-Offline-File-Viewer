@@ -77,6 +77,7 @@ def export_artist_file(path, out_dir=None, fmt='excel', validate_only=False):
     created_files = []
     base_name = path.stem
     target_dir = pathlib.Path(out_dir) if out_dir else path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     # Excel export
     if fmt in ('excel', 'all'):
@@ -145,6 +146,7 @@ def export_bolero_file(path, out_dir=None, fmt='excel', validate_only=False):
     created_files = []
     base_name = path.stem
     target_dir = pathlib.Path(out_dir) if out_dir else path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     # Excel export
     if fmt in ('excel', 'all'):
