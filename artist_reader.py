@@ -1548,6 +1548,9 @@ FUNCTION_COLOR_ORDER = ['Call to Port', 'Call to Conference', 'Call to Group', '
 
 # 16-step palette swatches in Director (table 0xfeb6e0 in Director 8.9.D2.exe).
 # Stored as COLORREF 0x00bbggrr; index 16 = None.
+# Group-colour swatches: RGB verified against Director's COLORREF table at 0xfeb4b0 (16 entries in index order,
+# used by FUN_009a4600; identical copies at 0xfeb598 / 0xfeb5e0 / 0xfeb628 / 0xfeb670). Director shows the
+# swatches without names, so the names here are descriptive labels only.
 SWATCH_COLORS = {
     0: ('Orange', 'FFB366'), 1: ('Yellow', 'FFFF73'), 2: ('Yellow-Green', 'D0FF73'),
     3: ('Light Green', 'A2FF73'), 4: ('Green', '73FF73'), 5: ('Mint', '80FFAA'),
