@@ -1331,7 +1331,8 @@ def read_port(ar, o, pool_state=0):
             s = {'s1': ar.string(), 's2': ar.string(), 's3': ar.string(), 'u32': ar.u32(),
                  'b': ar._take(4).hex()}
             if v >= 0x40:
-                s['s4'] = ar.string()
+                s['s4'] = ar.string()            # +0x00: 'STUN Server: Address' on the VoIP page (dialog 454)
+                s['stun_server'] = s['s4']
             # SIP / VoIP settings (FUN_00d0c2c0; names from getter FUN_00cb9dc0):
             # s1 (+0x08) = LocalSipId, s2 (+0x04) = RemoteHost, s3 (+0x0c) = RemoteSipId.
             bb = bytes.fromhex(s['b'])
