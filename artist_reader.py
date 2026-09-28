@@ -317,39 +317,81 @@ def read_sic_base(ar, o):
         o['sic_list2'] = [ar.u32() for _ in range(ar.u16())]
 
 
+IGMP_VERSIONS = ['IGMPv2', 'IGMPv3']                 # FUN_009b9180 (item data 0 / 1)
+NETWORK_SPEEDS = ['Auto', '1G Full-Duplex']          # FUN_009b8460
+NMOS_REG_MODES = ['Automatic', 'Peer2Peer', 'Manual']   # FUN_009b81f0, stored as the list index
+NMOS_VERSIONS = {1: 'v1.1', 2: 'v1.2', 3: 'v1.3'}    # FUN_009b7ff0 item data; also the IS-04 version list
+NMOS_INTERFACES = ['Media 1', 'Media 2', 'Config']    # FUN_009b7de0
+
+
 def read_aes67_media(ar, o, owner_is_sic, key='media'):
-    """CClientAES67MediaProperties FUN_00a057c0."""
+    """CClientAES67MediaProperties FUN_00a057c0: the "Media 1" / "Media 2" page (dialog 609;
+    init FUN_00a08620, OK FUN_00a08180). Defaults from the constructor FUN_00a05870."""
     m = {}
     if ar.version >= 0x2f0:
-        m['ip'], m['mask'], m['gateway'] = ar.u32(), ar.u32(), ar.u32()
+        m['ip'], m['mask'], m['gateway'] = ar.u32(), ar.u32(), ar.u32()    # +0x08 / +0x0c / +0x10
         m['flag'] = ar.u32() & 1
-        m['u16'] = ar.u16()
-        m['u8a'] = ar.u8()
-        m['u8b'] = ar.u8()
+        m['dhcp'] = bool(m['flag'])               # +0x14: "Obtain IP address automatically/DHCP"
+        m['u16'] = m['sip_port'] = ar.u16()       # +0x16: SIP TCP/UDP Port (default 5060)
+        m['u8a'] = m['dscp'] = ar.u8()            # +0x18: DSCP for outgoing RT(C)P (default 34)
+        m['u8b'] = ar.u8()                        # +0x15: IGMP Version
+        m['igmp_version'] = _pick(IGMP_VERSIONS, m['u8b'])
     if ar.version >= 0x450 and owner_is_sic:   # owner vtable+0xb8: true for SIC cards, false otherwise
-        m['u8c'] = ar.u8()
+        m['u8c'] = ar.u8()                        # +0x19: Network speed (SIC only)
+        m['network_speed'] = _pick(NETWORK_SPEEDS, m['u8c'])
     o.setdefault(key, []).append(m)
 
 
 def read_aes67_ptp(ar, o):
-    """CClientAES67PtpProperties FUN_00a06660."""
+    """CClientDnsProperties FUN_00a06660 (card +0x110): the "DNS" page (dialog 698; init FUN_00a07ba0,
+    OK FUN_00a07840). Kept under the old key 'ptp' for compatibility; the named copy is o['dns']."""
     if ar.version >= 0x240:
-        o['ptp'] = {'u8': ar.u8(), 'a': ar.u32(), 'b': ar.u32(), 's1': ar.string(), 's2': ar.string()}
+        p = {'u8': ar.u8(), 'a': ar.u32(), 'b': ar.u32(), 's1': ar.string(), 's2': ar.string()}
+        o['ptp'] = p
+        o['dns'] = {'automatic': bool(p['u8']),          # +0x09: obtain DNS server address automatically
+                    'primary': p['a'], 'secondary': p['b'],   # +0x0c / +0x10 (IPv4, same byte order as media ip)
+                    'suffix': p['s1'],                   # +0x14: DNS Suffix (optional)
+                    'extra': p['s2']}                    # +0x18: not shown on the page
+
+
+PTP_MODES = ['multicast', 'hybrid']                  # PTP (Communication) Mode, FUN_009b8fa0 item data
+PTP_ROLES = ['automatic', 'TimeReceiver']            # PTP Role, FUN_009b9fd0 item data
+PTP_FIELDS = ('domain', 'priority2', 'mode', 'role', 'announce_interval', 'sync_interval',
+              'announce_receipt_timeout', 'delay_request_interval', 'priority1')
 
 
 def read_aes67_a03fd0(ar, o):
+    """CClientAES67PtpProperties FUN_00a03fd0: the "PTP" page (dialog 699; init FUN_00a09f80, OK FUN_00a09c30).
+    Stored order +0x08 Domain, +0x0a Priority 2, +0x0b PTP Mode, +0x0c PTP Role, +0x0d Announce Interval,
+    +0x0e Sync Interval, +0x0f Announce Receipt Timeout, +0x10 Delay Request Interval, +0x09 Priority 1.
+    Intervals are signed log2 seconds. Defaults: 0, 120, 0, 0, 1, 0, 3, 0, 128."""
     if ar.version >= 0x2f0:
-        o['aes67_bytes'] = ar._take(9).hex()
+        raw = ar._take(9)
+        o['aes67_bytes'] = raw.hex()
+        vals = [b - 256 if i in (4, 5, 7) and b > 127 else b for i, b in enumerate(raw)]
+        o['ptp_settings'] = d = dict(zip(PTP_FIELDS, vals))
+        d['mode_name'] = _pick(PTP_MODES, d['mode'])
+        d['role_name'] = _pick(PTP_ROLES, d['role'])
 
 
 def read_aes67_a037a0(ar, o):
+    """CClientAES67NmosProperties FUN_00a037a0: the "NMOS" page (dialog 701; init FUN_00a095b0,
+    OK FUN_00a09359 / FUN_00a094d3)."""
     if ar.version >= 0x2f0:
         s = {'u16': ar.u16()}
         s['list'] = [ar.u16() for _ in range(ar.u16())]
         s['u8'], s['u32'], s['u16a'], s['u16b'], s['u8b'] = ar.u8(), ar.u32(), ar.u16(), ar.u16(), ar.u8()
         o['aes67_stream'] = s
+        o['nmos'] = {'port': s['u16'],                                   # +0x08: Node API port (default 8989)
+                     'is04_versions': [NMOS_VERSIONS.get(x, x) for x in s['list']],   # +0x0c
+                     'registration_mode': _pick(NMOS_REG_MODES, s['u8']),          # +0x28
+                     'registration_address': s['u32'],                  # +0x2c (IPv4)
+                     'registration_port': s['u16a'],                    # +0x30
+                     'registration_version': NMOS_VERSIONS.get(s['u16b'], s['u16b']),   # +0x32
+                     'interface': _pick(NMOS_INTERFACES, s['u8b'])}     # +0x34
     if ar.version >= 0x300:
-        o['aes67_u8'] = ar.u8()
+        o['aes67_u8'] = ar.u8()                   # +0x35: "Enable NMOS"
+        o.setdefault('nmos', {})['enabled'] = bool(o['aes67_u8'])
 
 
 def read_card_aes67_old(ar, o):
@@ -399,6 +441,8 @@ def read_card_sic_aes67(ar, o):
     v = ar.version
     read_sic_base(ar, o)
     if v >= 0x550:
+        # ids of two lists of owned child objects (+0x4c0 / +0x4c8, destroyed with the card by FUN_00bf8fe0);
+        # the loader skips them because the children are their own records
         o['aes67_list_a'] = [ar.u32() for _ in range(ar.u8())]
         o['aes67_list_b'] = [ar.u32() for _ in range(ar.u8())]
     if v >= 0x320:
@@ -418,9 +462,12 @@ def read_card_sic_aes67(ar, o):
     read_aes67_a03fd0(ar, o)
     read_aes67_a037a0(ar, o)
     if v >= 0x370:
-        o['aes67_16'] = ar._take(16).hex()
+        o['aes67_16'] = ar._take(16).hex()        # +0x4e8: device UUID (FUN_00bfbc40 creates one for older files)
+        u = o['aes67_16']
+        o['device_uuid'] = '-'.join((u[:8], u[8:12], u[12:16], u[16:20], u[20:]))
     if v >= 0x580:
-        o['aes67_tail'] = (ar.u32(), ar.u16())
+        o['aes67_tail'] = (ar.u32(), ar.u16())    # +0x508 object, "Discovery" page (dialog 730, FUN_009b0920)
+        o['bolero_discovery_ip'], o['bolero_discovery_port'] = o['aes67_tail']
 
 
 def read_card_sic_madi(ar, o):
