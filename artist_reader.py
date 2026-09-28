@@ -1908,6 +1908,8 @@ def read_scroll_list(ar, o):
         o['name'] = ar.string()
     if v > 0x37f:
         o['scroll_flag'] = ar.u8() & 1
+        # +0x144: this is the Global Scroll-List (FUN_00cd2c00 recreates one if no list has the flag)
+        o['is_global'] = bool(o['scroll_flag'])
 
 
 def read_member_gpio_tail(ar, o):
