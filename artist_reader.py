@@ -2498,7 +2498,9 @@ def read_connect_voip_device(ar, o):
     ar.u8()
     # page CConnectDeviceVoipPP (init FUN_00a1f330): IP settings, AES67 Input and AES67 Output addresses
     o['addresses'] = [(ar.i32(), ar.u16()) for _ in range(3)]
-    (o['ip_address'], o['ip_port']), (o['input_multicast_ip'], o['input_multicast_port']),         (o['output_multicast_ip'], o['output_multicast_port']) = o['addresses']
+    o['ip_address'], o['ip_port'] = o['addresses'][0]
+    o['input_multicast_ip'], o['input_multicast_port'] = o['addresses'][1]
+    o['output_multicast_ip'], o['output_multicast_port'] = o['addresses'][2]
     o['codec_connections'] = [ar.u32() for _ in range(ar.u16())]
     if ar.version < 0x550:
         ar.skip(4)
