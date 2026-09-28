@@ -2378,7 +2378,8 @@ def read_ifb(ar, o):
     o['dim_level'] = 5 if d > 7 else d                   # +0x20 (Director clamps >7 to 5)
     o['dim_db'] = IFB_DIM_DB.get(o['dim_level'], 'unconfirmed (%d)' % o['dim_level'])
     f = ar.u8()
-    o['ifb_flag_a'] = f & 1                              # +0x11 (boolean property index 8)
+    o['ifb_flag_a'] = f & 1                              # +0x11: IFB table column 8 'Sidetone' (on/off)
+    o['sidetone'] = bool(o['ifb_flag_a'])                # (column names: FUN_00b07470 m_Sidetone)
     o['is_trunk_enabled'] = bool((f >> 1) & 1)           # +0x12: IsTrunkEnabled (property index 7)
     o['ifb_flag_b'] = (f >> 1) & 1                       # backward-compat alias
     o['long_name'] = ar.string()                         # confirmed: IFB long name
