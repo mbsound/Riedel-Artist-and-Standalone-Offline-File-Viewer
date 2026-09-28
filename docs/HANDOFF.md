@@ -207,3 +207,47 @@ Suggested method:
 All 16 RGB values in `SWATCH_COLORS` match Director's COLORREF table at `0xfeb4b0`: indices 0-15 in order, used by `FUN_009a4600`, with four identical copies after it.
 - Director has no colour names (the picker shows swatches only), so Gemini's names are descriptive labels and nothing more.
 - A save check is still a nice-to-have, but no longer needed.
+
+## 9. Claude's 2026-09-28 pass: new names (for the Excel side)
+
+**New tools**
+- `tools/prop_names.py` builds `docs/director_props.txt`: Director's automation property names per class, with the member each one reads.
+- `tools/rtti.py` finds a class's vtable(s) from its RTTI name, e.g. `python tools/rtti.py CCmdDialPP`. Property pages are named `CCmd*PP` and similar; their slot 0x178 is the init, 0x100 the DDX, 0x194 the apply.
+
+**Every record (base trailer)**
+- `parent` is the owning object: key → panel, command → key, card → node.
+- `changed_last_session` is true when the object was created or edited in the session that produced the save. Director sets 0x5000 on every edit and resets all objects after each load and save. Useful for a "recently changed" filter.
+
+**Commands**
+- Reply: `priority`, `reply_from_conference`, `reply_duplex_call`, `reply_scroll`.
+- Call to Group: `priority`, `show_incoming_marker`, `use_2nd_channel`, `disable_dest_volume_adjust`.
+- Route: `priority`, `dest_uses_2nd_channel`, `source_uses_2nd_channel`, `disable_crosspoint_vol_adjust`.
+- Dim Level: `dim_value`, `destination`, `source`, and 2nd-channel flags. Correction: `port_a` is the Destination. Dim Speaker: `dim_speaker_by`. Both use `DIM_LEVELS`.
+- Remote Key (Signal, 0x26): `press_key`, `press_key_lever_up`, `lock_key`, `set_signaling_marker`, `signaling_marker`, `set_key_text`, `signal_text`.
+- Control Audiopatch: `key_function`. Dial: `dial_function`. Keypad: `keypad_function`.
+- IO Gain: `gain_mode`.
+- Sidetone command: `enable_speaker_mode`, `enable_headset_mode`, `applies_to_2nd_channel`, `norm_sidetone_level`.
+- Clone Output: the two second-channel flags.
+- Reserved or stored-only fields are marked in the reader comments.
+
+**Scroll lists**
+- `is_global` marks the Global Scroll-List.
+- Each entry gains `auto_label`, `dim_speaker`, `key_mode`, `latching_timeout` and `keypad_shortcut`.
+
+**Conferences and groups**
+- Conferences: `member_details`, with `use_second_channel`, `talk` and `listen` per member (Director's MemberList).
+- Groups: `member_second_channel`.
+
+**Ports**
+- `media_interface` (Media 1 / Media 2).
+- `panel_ui` gains `panel_operation_mode`, `show_colors_on`, `enable_colors`, `show_volume_bars`, `incoming_call_signalization`, `live_view_password` and `panel_menu_pin`.
+- Streams: `linked_port`, `linked_port_number`, `stream_uuid`, and the send `rtsp_uri`.
+
+**Logic**
+- Logic source: `src_type_name`, and `second_audio_channel`. Correction: the old `invert` is really the 2nd-audio-channel flag; the key is kept as an alias.
+- Monoflop: `retrigger_extends_time`.
+
+**Other records**
+- IFB: `sidetone` (IFB table column).
+- Node: `logic_destinations`.
+- Configuration root: `trunking_net_address`, `stage_net_address`, `stage_registration_url`, `stage_base_url`, `nets`, and the three `allow_more_*` options.
