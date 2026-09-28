@@ -700,7 +700,8 @@ def read_cmd_group(ar, o):
     o['show_incoming_marker'] = bool(w & 1)          # +0xa0 bit 0: 'Show incoming Marker / Enable volume adjust'
     o['use_2nd_channel'] = bool(w & 2)               # bit 1: 'Use 2nd channel on this port ... as the audio source'
     o['disable_dest_volume_adjust'] = bool(w & 4)    # bit 2: 'Disable Crosspoint volume adjust at Destination'
-    o['group'] = ar.u32()                 # CPhysGroup id
+    o['group'] = ar.u32()                 # CPhysGroup id (overwrites the record category; see 'category')
+    o['target_group'] = o['group']
     o['key'] = ar.u32()
     if 0x29 <= v <= 0x2a:
         ar.u32(); ar.u32(); skip_counted(ar)
@@ -2781,7 +2782,9 @@ def read_objects(ar, objs, stop_on_unknown=True):
             if stop_on_unknown:
                 return out, (cls, oid, grp, start)
             raise ArtFormatError('no reader for class 0x%x' % cls)
-        o = {'class': cls, 'id': oid, 'group': grp, 'offset': start}
+        # 'category' always holds the record type; 'group' does too, except on Call to Group commands (0x17),
+        # where the reader stores the target CPhysGroup id there (the Excel exporter relies on that)
+        o = {'class': cls, 'id': oid, 'group': grp, 'category': grp, 'offset': start}
         fn(ar, o)
         if cls not in NO_BASE_TRAILER:
             read_base(ar, o)
