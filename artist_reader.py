@@ -678,9 +678,14 @@ def read_cmd_conf(ar, o):
 
 
 def read_cmd_group(ar, o):
-    """CPhysCmdGroup (0x17, "Call to Group") FUN_00c3f620."""
+    """CPhysCmdGroup (0x17, "Call to Group") FUN_00c3f620. Group page: dialog 125, init FUN_00a6db50;
+    property getter FUN_00c3e250 (3 = priority, 4 = bit 1, 5 = bit 2, 6 = bit 0 of +0xa0)."""
     v = ar.version
-    read_cmd_head(ar, o)
+    w = read_cmd_head(ar, o)
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])   # +0x98 Priority
+    o['show_incoming_marker'] = bool(w & 1)          # +0xa0 bit 0: 'Show incoming Marker / Enable volume adjust'
+    o['use_2nd_channel'] = bool(w & 2)               # bit 1: 'Use 2nd channel on this port ... as the audio source'
+    o['disable_dest_volume_adjust'] = bool(w & 4)    # bit 2: 'Disable Crosspoint volume adjust at Destination'
     o['group'] = ar.u32()                 # CPhysGroup id
     o['key'] = ar.u32()
     if 0x29 <= v <= 0x2a:
@@ -692,16 +697,26 @@ def read_cmd_reply(ar, o):
     """CPhysCmdReply (0x18) FUN_00c48460."""
     v = ar.version
     w = read_cmd_head(ar, o)
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])   # +0x98 Priority (combo 1029)
     if v >= 0x30:
         o['reply_flags'] = w & 7
+        # Reply page (dialog 126; init FUN_00a6d1b0, OK FUN_00a6ce30)
+        o['reply_from_conference'] = bool(w & 1)   # +0x99 'Enable Reply for calls from conference'
+        o['reply_duplex_call'] = bool(w & 2)       # +0x9a 'Enable Duplex Call for call to ports' (0x350+)
+        o['reply_scroll'] = bool(w & 4)            # +0x9b 'Enable Scroll function' (0x440+)
     o['key'] = ar.u32()
     read_cmd_base(ar, o)
 
 
 def read_cmd_route(ar, o):
-    """CPhysCmdRoute (0x0a) FUN_00c4a6d0: route a source port to a destination port."""
+    """CPhysCmdRoute (0x0a) FUN_00c4a6d0: route a source port to a destination port. Property names from
+    FUN_00c49410 / getter FUN_00c49590."""
     v = ar.version
-    read_cmd_head(ar, o)
+    w = read_cmd_head(ar, o)
+    o['priority'] = PRIORITY_NAMES.get(o['cmd_u8'], 'value %d' % o['cmd_u8'])   # +0xa0 'Priority'
+    o['dest_uses_2nd_channel'] = bool(w & 1)     # +0xa2 bit 0 'DestinationUsesSecondChannel'
+    o['source_uses_2nd_channel'] = bool(w & 2)   # bit 1 'SourceUsesSecondChannel'
+    o['disable_crosspoint_vol_adjust'] = bool(w & 4)   # bit 2 'DisableCrossPointVolAdjust'
     if v < 0x480:
         o['route_old'] = ar._take(2).hex()
     o['source'], o['source_port_number'] = ar.u32(), ar.u16()
