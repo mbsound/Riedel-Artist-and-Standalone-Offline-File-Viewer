@@ -319,7 +319,7 @@ def read_sic_base(ar, o):
     if ar.version >= 0x3e0:
         o['sub_objects'] = u32_list(ar)   # e.g. CPhysClientSubSic ids
     if ar.version >= 0x500:
-        o['sic_list2'] = [ar.u32() for _ in range(ar.u16())]
+        o['sic_list2'] = [ar.u32() for _ in range(ar.u16())]   # object ids the loader skips (FUN_00c01900)
 
 
 IGMP_VERSIONS = ['IGMPv2', 'IGMPv3']                 # FUN_009b9180 (item data 0 / 1)
@@ -1077,7 +1077,8 @@ def read_node(ar, o):
         o['relay1_alarms'] = node_alarms(o['relay1_mask'])
         o['relay2_alarms'] = node_alarms(o['relay2_mask'])
         o['error_alarms'] = node_alarms(o['error_mask'])
-    o['node_list'] = [ar.u32() for _ in range(ar.i32())]   # +0xf4
+    o['node_list'] = [ar.u32() for _ in range(ar.i32())]   # +0xf4: CPhysLogicDst ids hosted by this frame
+    o['logic_destinations'] = o['node_list']
     o['node_address'] = o['node_500'] = ar.u8()          # +0x500: Property 2 'NodeAddress' (1-based frame number)
     o['node_id'] = o['node_88'] = ar.i32()               # +0x88: node_id = 0x100 + node_address
     o['node_8c'] = ar.i32()                              # +0x8c: Serial Number (8-digit hex; setter FUN_00ca5040
@@ -1789,7 +1790,7 @@ def read_sip_phone(ar, o):
      o['auth_username'], o['auth_password']) = o['sip_strings']
     o['sip_i32'] = ar.i32()
     o['reregister_time_s'] = o['sip_i32']                # +0x3c8
-    o['sip_u32'] = ar.u32()                              # written as 5
+    o['sip_u32'] = ar.u32()                              # reserved: written as 5, the loader discards it
     if v > 0x3f:
         o['sip_str7'] = ar.string()
         o['stun_server'] = o['sip_str7']                 # +0x3ac (STUN Server: Address)
