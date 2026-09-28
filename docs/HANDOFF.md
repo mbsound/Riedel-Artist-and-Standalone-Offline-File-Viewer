@@ -251,3 +251,19 @@ All 16 RGB values in `SWATCH_COLORS` match Director's COLORREF table at `0xfeb4b
 - IFB: `sidetone` (IFB table column).
 - Node: `logic_destinations`.
 - Configuration root: `trunking_net_address`, `stage_net_address`, `stage_registration_url`, `stage_base_url`, `nets`, and the three `allow_more_*` options.
+
+**Later on 2026-09-28**
+- Every record now carries `category`, the record type. On Call to Group commands `group` holds the target group id (the exporter relies on this); `target_group` is the same value.
+- Groups gain `trunk_enabled`.
+- Configuration root gains `issued_ids` and `setups` (up to 20 named panel-list pairs).
+- Ports gain `adjust_from_command_elements`: the audio-patch element indices whose "Adjust from command." box is ticked (the old `audiopatch_flags` bitset).
+- The VoIP port block gains `stun_server`.
+- Fibre links gain `drawing_points` (floats) and `nodes`.
+- NSA device gains `media1_ip`/`media1_port`, `media2_ip`/`media2_port`, `webui_ip`, `play_mode`, `ptp_role` and `receive_buffer_ms`.
+- VoIP connect device gains `ip_address`/`ip_port`, `input_multicast_*`, `output_multicast_*` and `number_of_channels_index`.
+- Streams and AES67 port settings gain `play_mode_name` (synton / synchron).
+
+**Coverage checks**
+- Vtable slot 0x30 returns each class code. Every concrete CPhys class in Director has a reader; only the non-serialised `CPhysTlnObj` and `CPhysGlobalObject` do not.
+- The readers never exercised by the sample files were checked against Director's load paths: the command readers, NSA device, VoIP device, event and scheduler task.
+- Fields that Director stores but never shows, or reads and discards, are marked in the reader comments.
