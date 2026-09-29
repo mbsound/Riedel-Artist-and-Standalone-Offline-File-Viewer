@@ -10,10 +10,11 @@ Working notes for continuing the Artist `.art` / Bolero `.bol` decoding work, wr
 
 | Path | What |
 |---|---|
-| `web_extractor.html` | Browser converter. Source of truth for decoding logic. |
-| `riedel_formats.py` | Shared Python decoders and the version whitelist (mirrors the web code). |
-| `art_extractor.py`, `bol_extractor.py`, `bol_gui.py` | Python CLI and macOS app. Output must match the web converter exactly. |
-| `tools/harness.js` | Runs the web converter headless in Node on sample files (needs `npm install pako@2.1.0 exceljs@4.4.0`). |
+| `artist_reader.py` | `.Art` reader transcribed from Director's load code; the source of truth for Artist fields. |
+| `art_to_excel.py` | Artist workbook, built only from `artist_reader.py`. |
+| `bol_faithful.py` | `.bol` reader (firmware-exact) and Bolero workbook. |
+| `export_tool.py` | Command line for both formats (Excel / JSON / validate / correlate). |
+| `build_web.py` | Builds the Pyodide browser page `web_extractor_v2.html` from the modules above. |
 | `tools/director_disasm.py` | Static helpers for reading Director's executable (needs `pip install capstone`). |
 
 ### Sample files (gitignored; copy them to the new machine by hand)
@@ -21,14 +22,14 @@ Everything to transfer is collected in one folder, `Verified Real Artist Files/`
 
 | Path inside the folder | What |
 |---|---|
-| `show-save-A.Art`, `show-save-B.Art`, `show-save-C.Art` | The trusted set. Real shows, Director 8.6.D1-29, schema `0x520`. |
+| Three real show saves (A, B, C) | The trusted set. Director 8.6.D1-29, schema `0x520`. Not published. |
 | `Artist test files (not show files)/Artist CRAZY.Art` | Director 8.9.D2-14 test system (schema `0x580`). The only 8.9 sample; operator ground truth in §7. |
-| `Artist test files (not show files)/test-save-D.Art` | Director 8.6. |
+| `Artist test files (not show files)/` second test save (D) | Director 8.6. |
 | `Bolero Standalone saves/*.bol` | The 8 Bolero Standalone NetConfig saves. |
 | `Reference binaries/Director 8.9.D2.exe` | Director, for static reading (`tools/director_disasm.py`). |
 | `Reference binaries/libRadon.so` | Bolero firmware library the `.bol` layout was read from (`CombinedNetConfig::packForSaving`). |
 
-The `show-save-B.Art` in this folder is a real Director 8.6 binary. (A different copy in the old repo root was a JSON export renamed to .Art.)
+Show save B is a real Director 8.6 binary. (A different copy in the old repo root was a JSON export renamed to .Art.)
 
 ### Windows PC setup (Parallels, Windows on ARM)
 - Director 8.3.D2 to 8.9.D2 are installed under `C:\Program Files (x86)\Riedel\`.
@@ -36,11 +37,16 @@ The `show-save-B.Art` in this folder is a real Director 8.6 binary. (A different
 - `Z:` is the Mac share `\\Mac\Home`; git needs a `safe.directory` entry for it.
 
 ### Regression check (run after every change)
+From `Code/`:
 ```bash
-V="Verified Real Artist Files"
-node tools/harness.js web_extractor.html out/ "$V"/*.Art "$V/Artist test files (not show files)"/*.Art "$V/Bolero Standalone saves"/*.bol
+python -c "import glob, artist_reader as A; print([len(A.parse_art(open(f,'rb').read())[1]) for f in glob.glob('../**/*.Art', recursive=True)])"
+python export_tool.py .. --format all --out-dir <scratch folder>
 ```
-Then compare `out/*.json` with `art_extractor.parse_art_file()` and `bol_extractor.parse_bol_file()`. Cards, nodes, ports, keys, conferences, warnings and notices must all be identical.
+Expected record counts: 6112, 6422, 1749, 1345, 6727 (Artist CRAZY changes as the user edits it). All 13 sample files
+must export.
+
+(The earlier web converter `web_extractor.html`, `riedel_formats.py`, `art_extractor.py`, `bol_extractor.py`,
+`bol_gui.py` and `tools/harness.js` were removed on 2026-09-29; they are in git history.)
 
 ---
 
@@ -79,7 +85,7 @@ Then compare `out/*.json` with `art_extractor.parse_art_file()` and `bol_extract
   **function = `KEY_FUNCTIONS_ENUM`** (0 None, 1 Talk, 2 Talk+AlwaysListen, 3 Talk&Listen, 4 Listen, 9 Reply, …).
   **mode = `BPKeyMode`** (0 Momentary, 1 Latching, 2 Auto, 3 On-only, 4 Off-only).
   **priority = `BPKeyPriority`** (0 Standard, 1 High, 2 Low).
-  The old `FUNC_MAP`/`MODE_MAP` in `bol_extractor.py` were wrong and have been replaced with the firmware-exact
+  The old `FUNC_MAP`/`MODE_MAP` in the removed `bol_extractor.py` were wrong and were replaced with the firmware-exact
   `bol_faithful.py` routines.
 - A `.bol` does not contain live RF or online state, nor net masters.
 
@@ -126,7 +132,7 @@ Older class table (from sample files):
 | `0x18` | key target: reply |
 
 ### 3.3 Records
-Almost every object record starts with `u32 type (0x4000 / 0x5000)` + `u32 system id`. The system id is detected per file as the most frequent u32 after a type code; never hard-code it (CRAZY is `b8 03 ff 52`, show is `e8 57 98 11`).
+Almost every object record starts with `u32 type (0x4000 / 0x5000)` + `u32 system id`. The system id is detected per file as the most frequent u32 after a type code; never hard-code it (e.g. `b8 03 ff 52` in one sample, `e8 57 98 11` in another).
 
 ### 3.4 Master endpoint table and endpoint descriptors
 - **Master table:** `u32 n`, then `n × (u32 type code, u32 object id)`, in the same order as the endpoint descriptors.
@@ -164,7 +170,7 @@ The next record's header repeats the owner. The owner is the endpoint object id.
   ```
   `kind` low byte: `0x08` conference, `0x09` trunk line, `0x18` DYNACONF.
 - **Group record:** same header but **no alias byte**, then `u32 n` and the members, with the long name followed by `ff ff`.
-  - Verified: show save A's `a person` group contains exactly his panel and his beltpack.
+  - Verified: a person's group in show save A contains exactly that person's panel and beltpack.
   - A group key is always a one-way Talk (operator).
 
 ### 3.8 Frames (nodes)
@@ -177,8 +183,8 @@ The next record's header repeats the owner. The owner is the endpoint object id.
   - Cards without ports fill gaps only when unambiguous.
 - **1024 cards:** `[type][system id][card id][00][u32 slot][u32 frame id][u8][u8 len + name]`. Network cards follow 13 bytes on with `IPv4 / mask / gateway` (LE), and a second (redundant) block 21 bytes after that. Bay = slot + 1.
   - Each card's records list the endpoint ids on it, which places those endpoints on their frame.
-- **Node number:** not decoded. Each frame record has a field `ff ff 7f 2d 00000000 NN NN 01` with NN = 2, 3, 4, 7 for CRAZY Node #1, #2, #3, #6, 12 for `<prefix> Node #12`, and 20 for `<Artist 1024 frame>`. It's unclear whether NN is the node ID.
-- **Unassigned:** about 53–57 endpoints in the big show files still can't be placed on a frame.
+- **Node number:** not decoded. Each frame record has a field `ff ff 7f 2d 00000000 NN NN 01` with NN = 2, 3, 4, 7 for CRAZY Node #1, #2, #3, #6, 12 and 20 for two Artist 1024 frames in the show saves. It's unclear whether NN is the node ID.
+- **Unassigned:** about 53–57 endpoints in the two large show saves still can't be placed on a frame.
 
 ---
 
@@ -275,4 +281,4 @@ Tools: `tools/ghidra/DecompileSerializers.java` (Ghidra 12 headless, types `CArc
    - Node ID: change one frame's node ID and diff, to identify the NN field.
    - CPU / PSU per frame, trunk phone numbers, IFB settings, conference talker / listener flags.
 4. **Confirm the unconfirmed type-table entries and card classes** from Director's lists (CRAZY Node #3 cards 8 / 11 / 12 / 13 and the `0x505` / `0x506` ports).
-5. **After each confirmed fact:** update both `web_extractor.html` and `riedel_formats.py` / `art_extractor.py`, re-run the regression check, and commit.
+5. **After each confirmed fact:** update `artist_reader.py` (and `art_to_excel.py` if it needs a column), re-run the regression check, and commit.

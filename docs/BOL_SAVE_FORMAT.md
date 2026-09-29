@@ -9,9 +9,8 @@ All 9 sections in this document have been validated with zero residual bytes acr
 `.bol` save files in `Bolero Standalone saves/`.
 
 Decompiled source references:
-- `docs/firmware_decomp/libRadon_3.4.1_serializers.c`
-- `docs/firmware_decomp/unpack_bodies_ref.c`
-- `docs/firmware_decomp/func_index.txt`
+- `docs/firmware_decomp/libRadon_3.4.1_serializers.c`, `unpack_bodies_ref.c`, `func_index.txt` (generated
+  locally with `DecompileTargets.java` from your own copy of the firmware; not part of the repository)
 
 ---
 
@@ -110,7 +109,7 @@ Routine: `radon::NetSettings::unpackDataFromSaved` → `radon::NetSettingsData::
 15. `getUInt8()`: `frequencyHoppingMode`
 16. `getUInt8()`: `radioFlags` (bit 0: radio enabled, bit 1: radio priority, bit 2: bp mon threshold, bit 3: 2G4 high power, bit 4: dect scanner, bit 5: web server encryption)
 17. `RegistrationMode::unpack`:
-    - `u8 mode` (0 Open, 1 Pin, 2 Closed)
+    - `u8 flags` (JSON `registrationMode`: `registrationEnabled` = flags != 0, bit 0 `otaEnabled`, bit 1 `nfcEnabled`, bit 2 `chargerEnabled`). *Corrected 2026-09-29: this is not an Open/Pin/Closed enum.*
     - `i8`
     - `i16`
 18. `getUInt8()`: `broadcastMode`
@@ -118,10 +117,10 @@ Routine: `radon::NetSettings::unpackDataFromSaved` → `radon::NetSettingsData::
 20. `getUInt8()`: `ptpDomain`
 21. `getUInt32()`: `debugFlags`
 22. `DSCPSettings::unpack`:
-    - 3 × `getUInt8()`: DSCP audio, DSCP PTP event, DSCP PTP general
+    - 3 × `getUInt8()`: `dscpPtp`, `dscpRtp` (audio), `dscpControl` (web GUI defaults 46 / 34 / 36). *Corrected 2026-09-29.*
 23. `getUInt8()`: `ptpMode`
 24. `ArtistNetSettings::unpack`:
-    - `u32 ip1`, `u32 ip2`, `read(4) netmask`, `u16 port` (byte-swapped)
+    - `u32 networkId`, `u32 clusterId`, `read(4) mcAnnounceIp`, `u16 mcAnnouncePort` (byte-swapped). *Corrected 2026-09-29 (was ip1/ip2/netmask/port).*
 25. `getInt16()`: `bpMonitoringThreshold`
 26. 4 × `getInt8()`:
     - `bpMonitoringBlockedRssiThreshold`
@@ -478,3 +477,51 @@ The correctness criterion is:
 $$\text{stream.position} == \text{section.end} \quad (\text{residual bytes} == 0)$$
 for every section across all test files. Any deviation indicates an unhandled field or incorrect count.
 All 9 sections in `bol_faithful.py` satisfy this exact-consumption gate on all 8 production `.bol` saves.
+
+
+---
+
+## 16. Field names from libRadon's JSON serializer (2026-09-29)
+
+Every field `bol_faithful.py` names now comes from the firmware itself. `JsonSerializer::serialize*` (the web GUI's REST
+data) writes each field as a JSON key followed by the member it reads; Ghidra leaves the key strings as
+`DAT_x + const` literals. `tools/radon_json_keys.py` resolves them from `libRadon.so` (Ghidra image base 0x10000:
+decompiled address = ELF vaddr + 0x10000) and `tools/radon_keymap.py` pairs each key with the member offset,
+which is then matched to the offset the corresponding `unpack()` stores to. Enum names come from the 3.4.1 web GUI
+(`CONFIG.*`, `AUDIO_PORT_USAGE`, `BP_DEFAULT_PRIORITY_TYPES`, `VOX_STATES`, ...).
+
+Highlights (see the comments in `bol_faithful.py` for every offset):
+
+- **RegisteredBPEntry**: `+4 TermId`, `+8 BPType`, `+0xc IPEI` (u16 + u32, printed `0x%04X %06X` by `IPEI::CharString`:
+  the DECT identity on the beltpack label), trailer `+0x278` timestamp, `+0x27c lastConnectTime`,
+  `+0x280` config timestamp, `+0x284` master timestamp.
+- **BPConfig**: bpNumber, the 17 BPVolumeData values (headset/speaker/sidetone volume, mic gains, limiters, Bluetooth,
+  RSM, priority dim), micType, 6 audio filters, noiseFilter, displayMode, skinnyKeyVolumeOverride, language, flag byte
+  `+0xfc` (speakerEnable, silentMode, echoCancellation, plugFuncActivateHeadset/Speaker, allowMultiRegistration,
+  automaticNetChange, showOnReply), replay/timeout values, display and key brightness, LED dims, Bluetooth,
+  signalization (5 × 4 bits: light / vibrate / beep / voice for call, silent call, low battery, out of range,
+  key volume), defaultSignalizationPattern, quick menu, defaultPriority + priorityExceptions
+  (0 Not Allowed, 1 Low, 2 Medium, 3 High), changeRights, vox, vad, partyLineReplyMode. The byte after bpNumber
+  (`+0x24`) is not serialized and is 0 in every sample. The BPKey byte after priority is `keyGroup`.
+- **VoxBase**: state, onThreshold, hysteresis, delta, holdTime, releaseTime, noiseGate.
+- **AudioPortsList entry**: id, volume, mute, usage bits (Key, Always-On, Reply, Trigger, On-Talk,
+  On-Notification/Beep, On-VOX, 0x80 always-listen half of Talk+AlwaysListen), one count per usage bit.
+- **AudioChannel**: ioDeviceConfig, channelIndex, input/output stream index, input/output plug, name, flags
+  (enabled, has input/output, input/output mute, phantom power), input gain, output gain, output priorityDim,
+  audioPorts, the five function lists, vox, showOnReply, filters (enabled, frequency), limiters (enabled,
+  threshold, attack, release).
+- **Partyline**: id, a type byte the firmware reads and discards, name, enabled, timestamp, showOnReply.
+- **Profile**: name, BPConfig, appendIdToDefaultName, updateName, timestamp.
+- **PriorityNode (antenna)**: nodeType, userId, name, description, priority terms and profiles, timestamp.
+- **NetSettings** overrides: each of the four override records starts with a mode
+  (0 off, 1 overrideActive, 2 overrideActive + overwriteBPconfig).
+- All other u32 "vc" values in removal / diff lists are Unix timestamps.
+
+Still raw (not serialized to JSON, not in the GUI, constant in the samples): ArtistBPKey bytes, ExternalBPKey
+first byte, BPConfig `+0x24`, bytes 2-3 of each IODeviceAudioChannelConfig, and the PunQtum device channel /
+control bytes.
+
+- **Disabled connectors**: an audio channel is bound to its connector pair by `channelIndex`, and its flags say which
+  sides it has. When a side of a pair is switched off on the device (`IODeviceAudioChannelConfig` plug type 0,
+  index -1), the channel's plug for that side is stored empty as well; the channel keeps its name and index.
+  `bol_faithful.channel_sides()` reports such a side as disabled (seen in the samples on two XLR outputs of one NSA-002A).

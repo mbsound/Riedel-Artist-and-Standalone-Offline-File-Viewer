@@ -132,7 +132,7 @@ mode(+8), priority(+0xc for func 1–5), destination-flags(+0x10), packed
 `serializeBPKeys` loops keys 1–6 + Reply (7 iterations, 28-byte stride).
 
 ### ⚠ Impact on the current parser (bug)
-`bol_extractor.py` reads a key token as `[type][sub][id][func][mode]`, but the real stream is
+The removed `bol_extractor.py` read a key token as `[type][sub][id][func][mode]`, but the real stream is
 `[label][function][mode][priority]…[AudioPortId type][id]` — **reversed** (function is near the
 start; type/id are the AudioPortId at the end). Its `FUNC_MAP` (1=Listen, 4=Talk) and `MODE_MAP`
 (0=Auto) do **not** match the firmware. The 87%-zero "mode" byte it tallied was most likely

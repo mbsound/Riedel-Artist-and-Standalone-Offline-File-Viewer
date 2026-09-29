@@ -293,3 +293,22 @@ All 16 RGB values in `SWATCH_COLORS` match Director's COLORREF table at `0xfeb4b
   - The CLI now honours `-h`/`--help` (it used to regenerate everything), rejects unknown options, fixes `-o` given last, and accepts a folder for several inputs.
 - `bol_faithful.py` (untracked, **not committed**): the DSCP row reads "Audio / PTP Event / PTP General" as "46 / 34 / 36" instead of a raw Python list.
 - Check: after the fixes, no cell in any of the 13 workbooks shows `None ->`, `Cmd 0x…`, `Port ID None`, `Pin None`, or a raw list or dict.
+
+## 11. 2026-09-29: Excel side rebuilt, old tools removed (Claude, at the user's request)
+
+The user asked for the Excel side to be fixed without trusting Gemini's work.
+- **`art_to_excel.py` was rewritten from scratch.** It is built only from `artist_reader.py`'s named fields and helpers. This supersedes the Track B description in section 5.
+  - Sheets: Summary, System, Nodes, Fibre Links, Cards, Ports, Keys (one row per key), Functions (one row per command), Conferences, Groups, IFBs, Scroll Lists, Audio Patches, Logic & GPIO, Users, Other Objects, Key Light Colours (the marker table), and All Records (every decoded field as JSON).
+  - Rows for objects changed in the last session are highlighted.
+  - The Ports columns use the mapping checked against Director's own Ports CSV (`tools/check_ports_csv.py`).
+- **Errors in the old workbook that the rewrite fixes:**
+  - Every IFB endpoint showed "Port 1.9".
+  - A 4-wire port was listed as an IP trunk.
+  - User passwords showed garbled bytes.
+  - Keys were in a 48-column grid that hid their settings.
+- **Reader fix:** the user password is stored as character-inverted UTF-8 (e.g. "P" is stored as U+00AF). `password` now holds the plain text ("Paul", "mb100444").
+- **`bol_faithful.py`** no longer imports `art_to_excel`; its styling helpers are now inside it (`_XLStyle`).
+- **`build_web.py`** now encodes raw bytes as hex in JSON (before, every `.bol` failed silently in the browser). `web_extractor_v2.html` was rebuilt, and all 13 sample files export in the browser.
+- **Removed:** `art_extractor.py`, `bol_extractor.py`, `riedel_formats.py`, `bol_gui.py`, the macOS app zip and `.spec`, `web_extractor.html`, `tools/harness.js`, the `fix_*.py` one-off scripts, the generated `.xlsx`/`.json` inside `Code/`, `Code/scratch/`, `tools/node_modules`. `tools/census.py` now uses `artist_reader.read_art`. README and FORMAT_NOTES were updated.
+- **Not committed:** git cannot write `.git/COMMIT_EDITMSG` (access denied) in this copy, so all of the above is uncommitted working-tree changes.
+- **Key bank:** on the Keys sheet, Bank 2 means the upper half of a holder's stored slots. This is inferred from usage and still needs a test save to confirm.

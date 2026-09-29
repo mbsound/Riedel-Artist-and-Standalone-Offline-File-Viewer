@@ -1,1247 +1,993 @@
 #!/usr/bin/env python3
 """
-Riedel Director .Art Configuration to Excel Exporter
-====================================================
-Transforms Riedel Director .Art save files into a complete, professional,
-multi-sheet Excel workbook matching Director's layout, nomenclature, and exact
-ground-truth decoded values.
+Artist .Art -> Excel workbook, built only from artist_reader.py's decoded fields and helpers.
 
-Directly driven by artist_reader.py.
+Every column comes from a named field or helper in artist_reader.py, each of which cites the Director code
+it was decoded from. Nothing is guessed here: where the reader marks a value as reserved or unconfirmed, the
+sheet says so. The last sheet, "All Records", lists every decoded field of every record, so values without a
+dedicated column are still in the workbook.
+
+Usage: python art_to_excel.py [-o OUTPUT] [FILE.Art ...]
 """
-
-import sys
-import os
 import glob
+import json
+import os
 import pathlib
-from collections import defaultdict
+import sys
+from collections import Counter, defaultdict
+
+from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 import artist_reader as A
 
-try:
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-except ImportError:
-    print("ERROR: openpyxl is required. Run: pip install openpyxl")
-    sys.exit(1)
+# ── styling ──────────────────────────────────────────────────────────────────────────────────────────
+HDR_FILL = PatternFill('solid', fgColor='1F3864')
+HDR_FONT = Font(bold=True, color='FFFFFF')
+TITLE_FONT = Font(bold=True, size=14)
+NOTE_FONT = Font(italic=True, color='555555')
+CHANGED_FILL = PatternFill('solid', fgColor='FFF2CC')
+MAX_CELL = 32000                                   # Excel's cell limit is 32767 characters
 
-# Color Palette
-C = {
-    'navy':        '1F3864',
-    'blue':        '2E5FA3',
-    'light_blue':  'D9E1F2',
-    'teal':        '1B6B6B',
-    'light_teal':  'D4EEEE',
-    'slate':       '4A4A4A',
-    'row_alt':     'F4F7FC',
-    'row_white':   'FFFFFF',
-    'green':       '1E6B1E',
-    'light_green': 'E2EFDA',
-    'amber':       'B25900',
-    'light_amber': 'FFF2CC',
-    'purple':      '5B3A8A',
-    'light_purple':'E8E0F0',
-    'border':      'D9D9D9',
+
+def _cell(v):
+    if v is None:
+        return ''
+    if isinstance(v, bool):
+        return 'Yes' if v else 'No'
+    if isinstance(v, (list, tuple, dict)):
+        v = json.dumps(v, default=str, ensure_ascii=False)
+    if isinstance(v, str):
+        v = ILLEGAL_CHARACTERS_RE.sub('', v)             # control characters Excel rejects
+    if isinstance(v, str) and len(v) > MAX_CELL:
+        v = v[:MAX_CELL] + ' …(truncated)'
+    return v
+
+
+def write_table(wb, title, headers, rows, note=None, changed_col=None, widths=None):
+    """One sheet: title, optional note, header row, data rows; frozen header, filter, sensible widths."""
+    ws = wb.create_sheet(title)
+    ws.cell(1, 1, title).font = TITLE_FONT
+    first = 3
+    if note:
+        ws.cell(2, 1, note).font = NOTE_FONT
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(first, c, h)
+        cell.fill, cell.font = HDR_FILL, HDR_FONT
+        cell.alignment = Alignment(wrap_text=True, vertical='top')
+    for r, row in enumerate(rows, first + 1):
+        for c, v in enumerate(row, 1):
+            cell = ws.cell(r, c, _cell(v))
+            cell.alignment = Alignment(vertical='top', wrap_text=isinstance(v, str) and len(v) > 60)
+        if changed_col is not None and row[changed_col] is True:
+            for c in range(1, len(headers) + 1):
+                ws.cell(r, c).fill = CHANGED_FILL
+    ws.freeze_panes = ws.cell(first + 1, 1)
+    if rows:
+        ws.auto_filter.ref = '%s%d:%s%d' % ('A', first, get_column_letter(len(headers)), first + len(rows))
+    for c, h in enumerate(headers, 1):
+        vals = [len(str(_cell(row[c - 1]))) for row in rows[:500]] + [len(h)]
+        w = (widths or {}).get(h) or min(max(vals) + 2, 60)
+        ws.column_dimensions[get_column_letter(c)].width = max(w, 8)
+    return ws
+
+
+# ── lookups ──────────────────────────────────────────────────────────────────────────────────────────
+NO_REF = (None, 0, 0xffffffff, -1)
+
+# Command class -> function name (Director's own names: RTTI CPhysCmd* classes and their descriptions)
+CMD_NAMES = {
+    0x0a: 'Route Audio', 0x13: 'Call to Port', 0x14: 'Listen to Port', 0x15: 'GPIO', 0x16: 'Call to Conference',
+    0x17: 'Call to Group', 0x18: 'Reply', 0x25: 'Select Audiopatch', 0x26: 'Remote Key', 0x30: 'Edit Conference',
+    0x31: 'Control Audiopatch', 0x32: 'Edit IFB', 0x33: 'Dim Speaker', 0x34: 'Dim Level', 0x35: 'Beep',
+    0x36: 'Telephone Dial / Hang up', 0x44: 'Logic', 0x49: 'Telephone Keypad', 0x4d: 'Kill Mic',
+    0x4e: 'Auto-Listen Off', 0x4f: 'Set Input/Output Gain', 0x5e: 'Sidetone', 0x5f: 'Send String',
+    0x67: 'Call to IFB', 0x6b: 'Hot Mic', 0x503: 'Clone Output Port',
 }
 
+# Named command fields shown in the details column (booleans only when set)
+CMD_DETAIL_KEYS = [
+    'trunkcall_priority', 'monitoring', 'isolate', 'isolate_self', 'autolisten_from_dest', 'beep_dest_on_call',
+    'allow_set_in_out_gain', 'duplex_call', 'disable_crosspoint_volume', 'allow_telephone_call',
+    'allow_fixed_number', 'fixed_number', 'allow_phonebook', 'allow_dialpad', 'talk', 'listen',
+    'use_second_channel', 'use_2nd_channel', 'allow_selecting_conf', 'allow_changing_dest_conf',
+    'show_incoming_marker', 'disable_dest_volume_adjust', 'reply_from_conference', 'reply_duplex_call',
+    'reply_scroll', 'source_uses_2nd_channel', 'dest_uses_2nd_channel', 'disable_crosspoint_vol_adjust',
+    'dim_speaker_by', 'dim_value', 'press_key', 'press_key_lever_up', 'lock_key', 'set_signaling_marker',
+    'signaling_marker', 'set_key_text', 'signal_text', 'key_function', 'dial_function', 'keypad_function',
+    'keypad_text', 'gain_mode', 'enable_speaker_mode', 'enable_headset_mode', 'applies_to_2nd_channel',
+    'norm_sidetone_level', 'send_text', 'output_to_clone_second_channel', 'cloned_output_second_channel',
+    'ifb_mode',
+]
 
-def clean_val(v):
-    if v is None:
-        return ""
-    return ILLEGAL_CHARACTERS_RE.sub("", str(v))
+
+class Ctx:
+    """Parsed file plus the lookups every sheet needs."""
+
+    def __init__(self, path):
+        self.path = pathlib.Path(path)
+        self.header, self.recs = A.parse_art(self.path.read_bytes())
+        self.byid = {r['id']: r for r in self.recs}
+        self.by_class = defaultdict(list)
+        for r in self.recs:
+            self.by_class[r['class']].append(r)
+        self.reader = {r['id']: A.READERS[r['class']].__name__ for r in self.recs}
+        self.ports = [r for r in self.recs if r['class'] in A.PORT_TYPE_NAMES]
+        self.cards = [r for r in self.recs if self.reader[r['id']].startswith('read_card')]
+        self.nodes = self.by_class[3]
+        self.net = (self.by_class[2] or [{}])[0]
+        self.keys = [r for r in self.recs if self.reader[r['id']] == 'read_key']
+        self.cmd_owner = {}                          # command id -> text of where it lives
+        for k in self.keys:
+            for c in k.get('commands') or []:
+                self.cmd_owner[c] = self.key_place(k)
+        for v in self.by_class[0x24]:
+            for c in v.get('commands') or []:
+                self.cmd_owner[c] = 'Virtual function %s on %s' % (v.get('vf_slot'), self.name(v.get('panel')))
+        for d in self.by_class[0x41]:
+            for c in d.get('commands') or []:
+                self.cmd_owner[c] = 'Logic destination %s' % d.get('name', '')
+        for s in self.by_class[0x10]:
+            for i, e in enumerate(s.get('entries') or [], 1):
+                self.cmd_owner[e['command']] = 'Scroll list %s entry %d' % (s.get('name', ''), i)
+
+    def port_sort_key(self, p):
+        """Frame name, bay, then Director's Port # (numbered per card; '1.10' sorts after '1.9')."""
+        card = A.port_card(p, self.byid) if p.get('card') in self.byid else {}
+        ps = p.get('port_strings') or []
+        num = ps[1] if len(ps) > 1 else ''
+        return (str(self.name(card.get('node'))) if card else '', card.get('slot') or 0, card.get('sub_bay') or 0,
+                [(0, int(t), '') if t.isdigit() else (1, 0, t) for t in num.split('.')], p['id'])
+
+    # names
+    def port_label(self, p):
+        num = (p.get('port_strings') or ['', ''])[1] if len(p.get('port_strings') or []) > 1 else ''
+        return ('%s %s' % (num, p.get('port_str') or p.get('name') or '')).strip()
+
+    def name(self, oid, what='object'):
+        """Readable name for any object id."""
+        if oid in NO_REF:
+            return ''
+        o = self.byid.get(oid)
+        if o is None:
+            return '(%s id %d not in file)' % (what, oid)
+        if o['class'] in A.PORT_TYPE_NAMES:
+            return self.port_label(o)
+        if o['class'] in A.EXPANSION_SLOTS:
+            return self.expansion_label(o)
+        for k in ('long_name', 'name', 'label'):
+            if o.get(k):
+                return o[k]
+        return '%s %d' % (o.get('category', 'object'), oid)
+
+    def expansion_label(self, e):
+        model = A.EXPANSION_NAMES.get(e['class']) or A.PORT_TYPE_NAMES.get(e['class']) or 'Expansion'
+        return '%s: %s #%s' % (self.name(e.get('host_panel')) or 'expansion', model, e.get('expansion_address', ''))
+
+    def key_counts(self):
+        n = Counter(k['holder'] for k in self.keys)
+        return n
+
+    def key_place(self, k):
+        n = self.key_counts_cache().get(k['holder'], 0)
+        key_no, bank = key_number(k['slot'], n)
+        return '%s, key %d%s' % (self.name(k['holder']), key_no, '' if bank == 1 else ' (bank %d)' % bank)
+
+    _kc = None
+
+    def key_counts_cache(self):
+        if self._kc is None:
+            self._kc = self.key_counts()
+        return self._kc
 
 
-def fill(hex_c):
-    return PatternFill(start_color=hex_c, end_color=hex_c, fill_type="solid")
+def key_number(slot, slots_on_holder):
+    """Stored slot -> (key number, bank). Panels store two slots per key (key count = slots / 2, matching every
+    confirmed panel); the lower half holds bank 1. The bank split is inferred from usage, not from Director."""
+    half = slots_on_holder // 2 if slots_on_holder >= 2 else slots_on_holder
+    if half <= 0:
+        return slot + 1, 1
+    return slot % half + 1, 1 + slot // half
 
 
-def bdr(style="thin", color=C['border']):
-    s = Side(style=style, color=color)
-    return Border(left=s, right=s, top=s, bottom=s)
-
-
-def title_banner(ws, title, subtitle, max_col=8, show_home_link=True):
-    if show_home_link and max_col > 2:
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col - 1)
-        c1 = ws.cell(row=1, column=1, value=clean_val(title))
-        c1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-        c1.fill = fill(C['navy'])
-        c1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-
-        home = ws.cell(row=1, column=max_col, value="<- Summary")
-        home.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF", underline="single")
-        home.fill = fill(C['navy'])
-        home.alignment = Alignment(horizontal="center", vertical="center")
-        home.hyperlink = "#'Summary'!A1"
-
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
-        c2 = ws.cell(row=2, column=1, value=clean_val(subtitle))
-        c2.font = Font(name="Calibri", size=9, italic=True, color="FFFFFF")
-        c2.fill = fill(C['blue'])
-        c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+def describe_command(cmd, ctx):
+    """(function, target, details) for one command record, from its decoded fields."""
+    cls = cmd['class']
+    fn = CMD_NAMES.get(cls, 'Command class 0x%x' % cls)
+    g = cmd.get
+    port = lambda k: ctx.name(g(k)) or '(no destination)'
+    if cls in (0x13, 0x14):
+        if g('target') in NO_REF and (g('trunk_name') or g('trunk_port_address')):
+            target = 'Trunk: %s (net %s, port %s)' % (g('trunk_name', ''), g('trunk_net_address'), g('trunk_port_address'))
+        else:
+            target = port('target')
+    elif cls == 0x16:
+        target = ctx.name(g('conference'), 'conference')
+    elif cls == 0x17:
+        target = ctx.name(g('target_group', g('group')), 'group')
+    elif cls == 0x67:
+        target = ctx.name(g('ifb'), 'IFB')
+    elif cls == 0x0a:
+        target = '%s -> %s' % (port('source'), port('destination'))
+    elif cls == 0x34:
+        target = '%s -> %s' % (port('source'), port('destination'))
+    elif cls == 0x503:
+        target = '%s -> %s' % (port('source'), port('dest'))
+    elif cls == 0x15:
+        target = ctx.name(g('gpio'), 'GPIO')
+    elif cls == 0x44:
+        target = ctx.name(g('logic'), 'logic destination')
+    elif cls == 0x25:
+        target = ctx.name(g('audiopatch'), 'audio patch')
+    elif cls == 0x26:
+        k = ctx.byid.get(g('target_key'))
+        target = ctx.key_place(k) if k and k.get('holder') is not None else ctx.name(g('target_key'), 'key')
+    elif cls in (0x31, 0x33, 0x35, 0x4f, 0x6b):
+        target = port('target')
+    elif cls == 0x18:
+        target = '(reply to last caller)'
     else:
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
-        c1 = ws.cell(row=1, column=1, value=clean_val(title))
-        c1.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
-        c1.fill = fill(C['navy'])
-        c1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
-        c2 = ws.cell(row=2, column=1, value=clean_val(subtitle))
-        c2.font = Font(name="Calibri", size=9, italic=True, color="FFFFFF")
-        c2.fill = fill(C['blue'])
-        c2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[1].height = 28
-    ws.row_dimensions[2].height = 18
+        target = ''
+    details = []
+    for k in CMD_DETAIL_KEYS:
+        v = g(k)
+        if v is None or v is False or v == '':
+            continue
+        details.append(k.replace('_', ' ') if v is True else '%s: %s' % (k.replace('_', ' '), v))
+    if g('created_by') not in NO_REF:
+        details.append('created by: %s' % ctx.name(g('created_by')))
+    return fn, target, '; '.join(details)
 
 
-def header_row(ws, row_idx, headers, bg=C['slate'], fg="FFFFFF"):
-    ws.row_dimensions[row_idx].height = 24
-    for col_idx, h in enumerate(headers, 1):
-        c = ws.cell(row=row_idx, column=col_idx, value=clean_val(h))
-        c.font = Font(name="Calibri", size=10, bold=True, color=fg)
-        c.fill = fill(bg)
-        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        c.border = bdr()
+def ip(v):
+    if v in (None, ''):
+        return ''
+    if isinstance(v, str):
+        return v
+    return '.'.join(str(b) for b in (v & 0xffffffff).to_bytes(4, 'big'))
 
 
-def write_cell(ws, row_idx, col_idx, val, bg=None, fg="000000", bold=False, align="left", size=9):
-    c = ws.cell(row=row_idx, column=col_idx, value=clean_val(val))
-    c.font = Font(name="Calibri", size=size, bold=bold, color=fg)
-    if bg:
-        c.fill = fill(bg)
-    c.alignment = Alignment(horizontal=align, vertical="center")
-    c.border = bdr()
-    return c
-
-
-def is_dark_hex(hex_str):
-    if not hex_str or len(hex_str) < 6:
-        return False
-    try:
-        r, g, b = int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16)
-        return (0.299 * r + 0.587 * g + 0.114 * b) < 140
-    except ValueError:
-        return False
-
-
-def get_swatch_fill_fg(idx):
-    if idx is None or idx == 16 or idx not in A.SWATCH_COLORS:
-        return None, "000000"
-    name, hex_code = A.SWATCH_COLORS[idx]
-    if not hex_code:
-        return None, "000000"
-    fg = "FFFFFF" if is_dark_hex(hex_code) else "000000"
-    return hex_code, fg
-
-
-def auto_width(ws, extra=3, max_w=65):
-    for col in ws.columns:
-        ltr = get_column_letter(col[0].column)
-        w = max((len(str(c.value or "")) for c in col), default=0)
-        ws.column_dimensions[ltr].width = min(max(w + extra, 10), max_w)
-    ws.views.sheetView[0].showGridLines = True
-
-
-LOGIC_CLASSES = (0x040, 0x041, 0x042, 0x087) + tuple(A.LOGIC_GATE_NAMES)
-
-
-def _port_name(byid, pid):
-    """Readable name for a port id; ids 0 / 0xffffffff / missing mean no destination."""
-    if pid in (None, 0, 0xffffffff, -1):
-        return '(no destination)'
-    t = byid.get(pid)
-    if not t:
-        return f"Port ID {pid}"
-    return t.get('port_str') or t.get('name') or f"Port ID {pid}"
-
-
-def _obj_name(byid, oid, what):
-    if oid in (None, 0, 0xffffffff, -1):
-        return f'(no {what})'
-    o = byid.get(oid)
-    if not o:
-        return f"{what.title()} ID {oid}"
-    return o.get('long_name') or o.get('label') or o.get('name') or f"{what.title()} ID {oid}"
-
-
-def _trunk_or_port(cmd, byid):
-    """Talk / Listen targets: a trunked command has no local port, only a trunk address and name."""
-    if cmd.get('target') in (None, 0, 0xffffffff, -1) and (cmd.get('trunk_name') or cmd.get('trunk_port_address')):
-        return f"Trunk: {cmd.get('trunk_name') or ''} (net {cmd.get('trunk_net_address')}, port {cmd.get('trunk_port_address')})"
-    return _port_name(byid, cmd.get('target'))
-
-
-def format_command(cmd, byid):
-    """(function name, target text, priority, (link kind, id) or None) for one command record."""
-    if not cmd:
-        return 'Empty', '', '', None
-    cls = cmd.get('class', 0)
-    prio = cmd.get('priority', '')
-    if cls == 0x13:
-        return 'Call to Port', _trunk_or_port(cmd, byid), prio, ('port', cmd.get('target'))
-    if cls == 0x14:
-        return 'Listen to Port', _trunk_or_port(cmd, byid), prio, ('port', cmd.get('target'))
-    if cls == 0x16:
-        return 'Conference', _obj_name(byid, cmd.get('conference'), 'conference'), prio, ('conf', cmd.get('conference'))
-    if cls == 0x17:
-        gid = cmd.get('target_group', cmd.get('group'))
-        return 'Group', _obj_name(byid, gid, 'group'), prio, ('group', gid)
-    if cls == 0x18:
-        return 'Reply', '<REPLY>', prio, None
-    if cls == 0x67:
-        return 'Call to IFB', _obj_name(byid, cmd.get('ifb'), 'IFB'), prio, ('ifb', cmd.get('ifb'))
-    if cls == 0x0a:
-        src = _port_name(byid, cmd.get('source'))
-        dst = _port_name(byid, cmd.get('destination'))
-        return 'Route Audio', f"{src} -> {dst}", prio, None
-    if cls == 0x15:
-        return 'GPIO', _obj_name(byid, cmd.get('gpio'), 'GPIO'), prio, None
-    if cls == 0x44:
-        return 'Logic', _obj_name(byid, cmd.get('logic'), 'logic destination'), prio, None
-    if cls == 0x25:
-        return 'Select Audiopatch', _obj_name(byid, cmd.get('audiopatch'), 'audio patch'), prio, None
-    if cls == 0x26:
-        key = byid.get(cmd.get('target_key'))
-        acts = [n for f, n in (('press_key', 'press'), ('press_key_lever_up', 'lever up'), ('lock_key', 'lock'),
-                               ('set_signaling_marker', 'marker'), ('set_key_text', 'text')) if cmd.get(f)]
-        name = (key.get('label') if key else f"Key ID {cmd.get('target_key')}") or '(key)'
-        return 'Remote Key', f"{name} ({', '.join(acts) or 'no action'})", prio, None
-    if cls == 0x30:
-        return 'Edit Conference', '', prio, None
-    if cls == 0x31:
-        return 'Control Audiopatch', f"{_port_name(byid, cmd.get('target'))} ({cmd.get('key_function', '')})", prio, None
-    if cls == 0x32:
-        return 'Edit IFB', '', prio, None
-    if cls == 0x33:
-        return 'Dim Speaker', f"{_port_name(byid, cmd.get('target'))} by {cmd.get('dim_speaker_by', '')}", prio, None
-    if cls == 0x34:
-        src = _port_name(byid, cmd.get('source'))
-        dst = _port_name(byid, cmd.get('destination'))
-        return 'Dim Level', f"{src} -> {dst} ({cmd.get('dim_value', '')})", prio, None
-    if cls == 0x35:
-        return 'Beep', _port_name(byid, cmd.get('target')), prio, None
-    if cls == 0x36:
-        return 'Telephone Dial / Hang up', cmd.get('dial_function', ''), prio, None
-    if cls == 0x49:
-        return 'Telephone Keypad', cmd.get('keypad_function', ''), prio, None
-    if cls == 0x4d:
-        return 'Kill Mic', '', prio, None
-    if cls == 0x4e:
-        return 'Auto-Listen Off', '', prio, None
-    if cls == 0x4f:
-        return 'Set Input/Output Gain', _port_name(byid, cmd.get('target')), prio, None
-    if cls == 0x5e:
-        return 'Sidetone', cmd.get('norm_sidetone_level', ''), prio, None
-    if cls == 0x5f:
-        return 'Send String', cmd.get('send_text', ''), prio, None
-    if cls == 0x6b:
-        return 'Hot Mic', _port_name(byid, cmd.get('target')), prio, None
-    if cls == 0x503:
-        return 'Clone Output Port', f"{_port_name(byid, cmd.get('source'))} -> {_port_name(byid, cmd.get('dest'))}", prio, None
-    return f"Cmd 0x{cls:02x}", cmd.get('cmd_name', ''), prio, None
-
-
-def compute_target_row_map(recs):
-    """
-    Computes exact 1-indexed row numbers for all Ports, Conferences, Groups, and IFBs
-    to allow deterministic sheet-to-sheet cross-linking.
-    """
-    ports = [r for r in recs if r['class'] in A.PORT_TYPE_NAMES]
-    sorted_ports = sorted(ports, key=lambda p: (p.get('port_number', 0), p.get('port_index', 0)))
-    confs = sorted([r for r in recs if r['class'] == 0x012], key=lambda c: c.get('label', ''))
-    groups = sorted([r for r in recs if r['class'] == 0x011], key=lambda g: g.get('label', ''))
-    ifbs = sorted([r for r in recs if r['class'] == 0x066], key=lambda i: i.get('ifb_number', 0))
-
-    tmap = {}
-    for idx, p in enumerate(sorted_ports, 5):
-        tmap[('port', p['id'])] = ('Ports', idx)
-    for idx, c in enumerate(confs, 5):
-        tmap[('conf', c['id'])] = ('Conferences', idx)
-    for idx, g in enumerate(groups, 5):
-        tmap[('group', g['id'])] = ('Groups', idx)
-    for idx, ifb in enumerate(ifbs, 5):
-        tmap[('ifb', ifb['id'])] = ('IFB Routing', idx)
-    return tmap
-
-
-# ── Sheet 1: Summary ─────────────────────────────────────────────────────────
-def build_summary_sheet(wb, h, recs, byid, filepath):
-    ws = wb.create_sheet(title="Summary")
-    net = next((r for r in recs if r['class'] == 2), {})
-    net_gen = A.net_general(net)
-    sys_name = net_gen.get('System name') or pathlib.Path(filepath).stem
-    director_ver = h.get('creator', 'Unknown')
-    schema_hex = f"0x{h.get('version', 0):03x}"
-
-    title_banner(ws, f"Artist Matrix System Summary: {sys_name}",
-                 f"{director_ver}  |  File: {pathlib.Path(filepath).name}", max_col=4, show_home_link=False)
-
-    headers = ["Category", "Parameter / System Item", "Decoded Value", "Technical Description"]
-    header_row(ws, 4, headers, bg=C['navy'])
-
-    nodes = [r for r in recs if r['class'] == 3]
-    ports = [r for r in recs if r['class'] in A.PORT_TYPE_NAMES]
-    keys = [r for r in recs if r['class'] == 9]
-    keys_configured = [k for k in keys if k.get('commands')]
-    confs = [r for r in recs if r['class'] == 0x012]
-    groups = [r for r in recs if r['class'] == 0x011]
-    ifbs = [r for r in recs if r['class'] == 0x066]
-    patches = [r for r in recs if r['class'] == 0x019]
-    users = [r for r in recs if r['class'] == 0x023]
-    boleros = [p for p in ports if p['class'] == 0x440]
-    panels = [p for p in ports if p['class'] not in (0x440, 0x401, 0x402, 0x403, 0x438, 0x439, 0x441, 0x442, 0x445, 0x502, 0x508, 0x513, 0x514, 0x515)]
-    ties = [p for p in ports if p['class'] in (0x401, 0x402, 0x403, 0x438, 0x439, 0x441, 0x442)]
-    trunks = [p for p in ports if p['class'] in (0x445, 0x502, 0x508)]
-    expansions = [r for r in recs if r['class'] in A.EXPANSION_SLOTS or r['class'] == 0x507]
-
+# ── sheets ───────────────────────────────────────────────────────────────────────────────────────────
+def sheet_summary(wb, ctx):
+    ws = wb.active
+    ws.title = 'Summary'
+    ws.cell(1, 1, 'Artist configuration: %s' % ctx.path.name).font = TITLE_FONT
+    h = ctx.header
     rows = [
-        ("System Metadata", "Director Software Release", director_ver, "Exact Riedel Director binary release"),
-        ("System Metadata", "System Name", sys_name, "Configured matrix system name in CPhysNet"),
-        ("System Metadata", "Net Number", net_gen.get('Net number', 0), "Inter-matrix network identification number"),
-        ("System Metadata", "Archive Schema Revision", schema_hex, "Director save serialization schema version"),
-        ("Network Topology", "Matrix Nodes (Frames)", len(nodes), "Independent hardware frames in network"),
-        ("Network Topology", "Fibre Links (CPhysLWL)", len([r for r in recs if r['class'] == 5]), "Dual-ring inter-frame optical connections"),
-        ("Matrix Endpoints", "Total Physical & Virtual Ports", len(ports), "Total matrix ports across all frames & cards"),
-        ("Matrix Endpoints", "Hardware Keypanels (Master Stations)", len(panels), "Physical SmartPanels and master stations"),
-        ("Matrix Endpoints", "Expansion Panels (Modules)", len(expansions), "Hardware extension modules linked to keypanels"),
-        ("Matrix Endpoints", "Bolero Wireless Beltpacks", len(boleros), "Active Bolero DECT wireless beltpack endpoints"),
-        ("Matrix Endpoints", "Audio Tie Lines & 4-Wires", len(ties), "Analogue and digital audio matrix tie lines"),
-        ("Matrix Endpoints", "Digital IP Trunks & VoIP", len(trunks), "AES67 trunklines, VoIP connections, and SIP accounts"),
-        ("Panel Keys", "Total Physical Keys Allocated", len(keys), "Individual key objects allocated in matrix"),
-        ("Panel Keys", "Configured Active Keys", len(keys_configured), "Keys assigned with active Talk/Listen commands"),
-        ("Production Audio", "Conferences (Partylines)", len(confs), "Conferences / multi-user partyline channels"),
-        ("Production Audio", "Talk Groups", len(groups), "One-to-many directed talkgroups"),
-        ("Production Audio", "IFB Foldback Channels", len(ifbs), "Broadcast interruptible foldback channels"),
-        ("Production Audio", "Audio Patches (DSP Matrices)", len(patches), "Per-panel mixing matrices and filter chains"),
-        ("Control & Automation", "GPIO Input Channels", len([r for r in recs if r['class'] == 0x00c]), "Hardware opto-isolated GPI inputs"),
-        ("Control & Automation", "GPIO Output Channels", len([r for r in recs if r['class'] == 0x00d]), "Hardware relay output GPI channels"),
-        ("Control & Automation", "Logic Functions & Lines", len([r for r in recs if r['class'] in LOGIC_CLASSES]), "Internal matrix logic sources, gates & lines"),
-        ("Security & Access", "User Accounts", len(users), "Configured administrator & operator accounts"),
+        ('File', ctx.path.name),
+        ('Saved by', h.get('creator', '')),
+        ('File format version', '0x%x' % h.get('version', 0)),
+        ('Records', len(ctx.recs)),
+        ('Objects created or changed in the session that produced this save', sum(1 for r in ctx.recs if r.get('changed_last_session'))),
+        ('Panels', sum(n for cat, _, n in resource_counts(ctx) if cat == 'Panels')),
+        ('Bolero beltpacks', sum(n for cat, _, n in resource_counts(ctx) if cat == 'Bolero beltpacks')),
+        ('', ''),
+        ('Record type', 'Count'),
     ]
-
-    for r_idx, (cat, param, val, desc) in enumerate(rows, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-        write_cell(ws, r_idx, 1, cat, bg=bg, bold=True)
-        write_cell(ws, r_idx, 2, param, bg=bg)
-        write_cell(ws, r_idx, 3, val, bg=bg, bold=True, align="center")
-        write_cell(ws, r_idx, 4, desc, bg=bg)
-
-    # Table of Contents & Navigation Links
-    toc_row = len(rows) + 7
-    ws.merge_cells(start_row=toc_row - 2, start_column=1, end_row=toc_row - 2, end_column=4)
-    c_toc_title = ws.cell(row=toc_row - 2, column=1, value="Workbook Table of Contents & Direct Navigation")
-    c_toc_title.font = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
-    c_toc_title.fill = fill(C['navy'])
-    c_toc_title.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[toc_row - 2].height = 24
-
-    toc_headers = ["Sheet #", "Sheet Name", "Direct Navigation Link", "Decoded Contents & Operational Scope"]
-    header_row(ws, toc_row - 1, toc_headers, bg=C['blue'])
-
-    toc_entries = [
-        ("Sheet 2", "System Settings", "System-Wide Defaults, CPhysNet, Dialog 207/208/703/729, Function Colors & Key Markers"),
-        ("Sheet 3", "Nodes & Topology", "Artist Mainframes, Chassis Models, Serial Numbers, Alarm Masks, Fibre Links (CPhysLWL)"),
-        ("Sheet 4", "Cards & Slots", "Hardware Interface Cards, Sub-Bays, AES67 Media, PTP & NMOS Settings, MADI/Dante"),
-        ("Sheet 5", "Ports", "Digital Matrix Ports Grid: 1:1 replica of Director Ports Table with Gains, Room, Shortcuts & IPs"),
-        ("Sheet 6", "Panels & Keys", "Hardware SmartPanels, Beltpacks & Active Key Assignments with Swatch Fills & Linked Targets"),
-        ("Sheet 7", "Conferences", "Production Conferences / Partylines, Member Port Lists, Swatch Fills & Shortcuts"),
-        ("Sheet 8", "Groups", "Directed Talkgroups, Member Port Lists, Swatch Fills & Trunk Addresses"),
-        ("Sheet 9", "IFB Routing", "Broadcast IFB Channels, Dim Scales, Inputs, Mix-Minus & Output Endpoints"),
-        ("Sheet 10", "Audio Patch", "6x6 Matrix Mixing Crosspoints, Filters, Limiter/Compressor Dynamics & Gain Offsets"),
-        ("Sheet 11", "Logic & GPIO", "GPI Inputs, Relay Outputs, Logic Sources, Destinations, Monoflops & Logic Lines"),
-        ("Sheet 12", "IP Trunks", "Inter-Matrix IP Trunklines, VoIP Connections & SIP Accounts with Host Addresses & Codecs"),
-        ("Sheet 13", "Users & Access", "Operator & Admin Accounts, Roles, Permission Masks & Courtesy PINs"),
-        ("Sheet 14", "Scheduler", "Automated Matrix Scheduler Tasks, Calendar Recurrence & Linked Events"),
-    ]
-
-    for idx, (s_num, s_name, s_desc) in enumerate(toc_entries, toc_row):
-        bg = C['row_alt'] if idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[idx].height = 20
-        write_cell(ws, idx, 1, s_num, bg=bg, align="center", bold=True)
-        write_cell(ws, idx, 2, s_name, bg=bg, bold=True)
-        link_cell = write_cell(ws, idx, 3, f"-> Open {s_name}", bg=bg, align="center")
-        link_cell.hyperlink = f"#'{s_name}'!A1"
-        link_cell.font = Font(name="Calibri", size=9, bold=True, color="0000EE", underline="single")
-        write_cell(ws, idx, 4, s_desc, bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
+    rows += sorted(Counter(r.get('category', '?') for r in ctx.recs).items(), key=lambda kv: -kv[1])
+    for r, (a, b) in enumerate(rows, 3):
+        ws.cell(r, 1, a)
+        ws.cell(r, 2, _cell(b))
+        if a in ('Record type',):
+            ws.cell(r, 1).font = ws.cell(r, 2).font = Font(bold=True)
+    ws.cell(len(rows) + 5, 1, 'Rows highlighted in yellow on the other sheets were created or changed in the session '
+                              'that produced this save (Director marks every edited object and clears the mark on '
+                              'each load and save).').font = NOTE_FONT
+    ws.column_dimensions['A'].width = 70
+    ws.column_dimensions['B'].width = 40
 
 
-# ── Sheet 2: System Settings ───────────────────────────────────────────────────
-def build_system_settings_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="System Settings")
-    net = next((r for r in recs if r['class'] == 2), {})
-    if not net:
+def sheet_system(wb, ctx):
+    net = ctx.net
+    rows = []
+    sections = [('General', A.net_general), ('Panel defaults', A.net_panel_defaults),
+                ('Call and key defaults', A.net_call_key_defaults), ('Port settings', A.net_port_settings),
+                ('VoIP defaults', A.net_voip_defaults), ('Monitor defaults', A.net_monitor_defaults)]
+    for title, fn in sections:
+        try:
+            vals = fn(net)
+        except Exception as e:                       # a helper that cannot read this file's layout
+            vals = {'(not available)': str(e)}
+        for k, v in vals.items():
+            rows.append((title, k, v))
+    for w in ctx.by_class[1]:                        # configuration root
+        for k, label in (('trunking_net_address', 'Trunking net address (0 disables Trunking)'),
+                         ('stage_net_address', 'Stage net address (0 disables Stage)'),
+                         ('stage_registration_url', 'Stage registration URL'), ('stage_base_url', 'Stage base URL'),
+                         ('allow_more_logic_sources_per_destination', 'Allow more logic sources per destination'),
+                         ('allow_more_logic_destinations_per_node', 'Allow more logic destinations per node'),
+                         ('allow_more_members_per_conference', 'Allow more members per conference')):
+            if k in w:
+                rows.append(('Configuration root', label, w[k]))
+        for s in w.get('setups') or []:
+            rows.append(('Configuration root', 'Setup "%s"' % s['name'],
+                         'panels A: %s | panels B: %s' % (', '.join(ctx.name(i) for i in s['a']),
+                                                          ', '.join(ctx.name(i) for i in s['b']))))
+    write_table(wb, 'System', ['Section', 'Setting', 'Value'], rows,
+                note='Director\'s wording from the reader helpers (net_general, net_panel_defaults, ...).')
+
+
+def sheet_markers(wb, ctx):
+    try:
+        marks = A.net_markers(ctx.net)
+    except Exception:
+        marks = []
+    if not marks:
         return
-    net_gen = A.net_general(net)
-    net_call = A.net_call_key_defaults(net)
-    net_port = A.net_port_settings(net)
-    net_mon = A.net_monitor_defaults(net)
-
-    title_banner(ws, "System-Wide Defaults & CPhysNet Configuration",
-                 f"System: {net_gen.get('System name', '')}  |  Net Number: {net_gen.get('Net number', '')}", max_col=4)
-
-    headers = ["Setting Category", "Parameter Name", "Configured Value", "Scope / Details"]
-    header_row(ws, 4, headers, bg=C['navy'])
-
-    settings_rows = [
-        # General & Trunking
-        ("General", "System Name", net_gen.get('System name'), "System name identifier"),
-        ("General", "Net Number", net_gen.get('Net number'), "Inter-matrix network address"),
-        ("General", "Default Trunk Address: Port", net_gen.get('Default Trunking Address: Port'), "Default trunk address for ports"),
-        ("General", "Default Trunk Address: Group", net_gen.get('Default Trunking Address: Group'), "Default trunk address for groups"),
-        ("General", "Default Trunk Address: Conference", net_gen.get('Default Trunking Address: Conference'), "Default trunk address for conferences"),
-        ("General", "Default Trunk Address: Trunkline", net_gen.get('Default Trunking Address: Trunkline'), "Default trunk address for trunklines"),
-        # Monitor Defaults (Dialog 703)
-        ("Monitor Defaults", "Monitor Keystate", net_mon.get('Monitor Keystate'), "Keystate monitoring default (Dialog 703)"),
-        ("Monitor Defaults", "Monitor Call to Port", net_mon.get('Monitor Call to Port'), "Call to port monitoring default (Dialog 703)"),
-        ("Monitor Defaults", "Monitor Call to IFB", net_mon.get('Monitor Call to IFB'), "Call to IFB monitoring default (Dialog 703)"),
-        # Color Defaults (Dialog 729)
-        ("Color Defaults", "Define Colors Automatically", "Enabled" if net_gen.get('Define colors automatically') else "Disabled", "Dialog 729 CheckBox 1879"),
-        *[( "Color Defaults", f"Function Color: {fn_name}", net_gen.get(f"Function color: {fn_name}", "None"), "Dialog 729 Palette Assignment")
-          for fn_name in A.FUNCTION_COLOR_ORDER],
-        # AES67 Defaults (Dialog 676)
-        ("AES67 Defaults", "PTP Domain", net_gen.get('AES67: PTP Domain'), "IEEE 1588 PTP Domain number"),
-        ("AES67 Defaults", "PTP Mode", net_gen.get('AES67: PTP Mode'), "PTP distribution mode (multicast / hybrid)"),
-        ("AES67 Defaults", "DSCP / DiffServ", net_gen.get('AES67: DSCP'), "QoS Differentiated Services Code Point"),
-        ("AES67 Defaults", "Payload Type", net_gen.get('AES67: Payload Type'), "RTP Payload Type number"),
-        ("AES67 Defaults", "SSRC Identifier", net_gen.get('AES67: SSRC'), "Synchronization Source identifier"),
-        ("AES67 Defaults", "Timestamp Offset", net_gen.get('AES67: Time Stamp Offset'), "PTP timestamp offset"),
-        ("AES67 Defaults", "SIP Port (Ports, Artist 32/64/128)", net_gen.get('AES67: SIP TCP/UDP port (ports, Artist-32/64/128)'), "Standard SIP TCP/UDP port"),
-        ("AES67 Defaults", "SIP Port (Clients)", net_gen.get('AES67: SIP TCP/UDP port (clients)'), "Client SIP TCP/UDP port"),
-        ("AES67 Defaults", "TCP Port on Artist-1024", net_gen.get('AES67: TCP port on Artist-1024'), "Artist-1024 management port"),
-        ("AES67 Defaults", "Audio Bit Depth", net_gen.get('AES67: Bit Depth'), "Encoding bit depth (e.g. L24)"),
-        ("AES67 Defaults", "Packet Time", net_gen.get('AES67: Packet Time'), "AES67 audio transmission packet time"),
-        ("AES67 Defaults", "Default Connection Method", net_gen.get('AES67: Default Connection Method'), "Connection negotiation protocol"),
-        # Call Defaults (Dialog 208)
-        ("Call Defaults", "Call to Port: Call Priority", net_call.get('Call to Port: Call Prio'), "Default priority for port calls"),
-        ("Call Defaults", "Call to Port: Duplex", net_call.get('Call to Port: Duplex'), "Duplex calling mode"),
-        ("Call Defaults", "Reply: Call Priority", net_call.get('Reply: Call Prio'), "Priority for Reply key"),
-        ("Call Defaults", "Reply: Calls from Conference", net_call.get('Reply: Calls from Conf'), "Allow reply to conference calls"),
-        ("Call Defaults", "Reply: Duplex", net_call.get('Reply: Duplex'), "Reply duplex mode"),
-        ("Call Defaults", "Call to Conference: Call Priority", net_call.get('Call to Conference: Call Prio'), "Default conference call priority"),
-        ("Call Defaults", "Call to Group: Call Priority", net_call.get('Call to Group: Call Prio'), "Default group call priority"),
-        ("Call Defaults", "Listen to Port: Call Priority", net_call.get('Listen to Port: Call Prio'), "Default listen priority"),
-        ("Call Defaults", "Route Audio: Call Priority", net_call.get('Route Audio: Call Prio'), "Default audio routing priority"),
-        # Key Defaults (Dialog 207)
-        ("Key Defaults", "Default Key Mode", net_call.get('Key Mode'), "Standard key operation mode"),
-        ("Key Defaults", "Latching Timeout", net_call.get('Latching Timeout'), "Default key latching timeout"),
-        ("Key Defaults", "Activate Speaker Dim", "Yes" if net_call.get('Activate Speaker Dim') else "No", "Dim speaker when key is pressed"),
-        ("Key Defaults", "Restore Volume Level", "Yes" if net_call.get('Restore volume level') else "No", "Restore previous volume level"),
-        ("Key Defaults", "Restart Latching Timer", "Yes" if net_call.get('Restart Latching timer') else "No", "Reset timer on key tap"),
-        ("Key Defaults", "Action When Muted Key Pressed", net_call.get('Action when muted key is pressed'), "Behavior when pressing muted key"),
-        # Port Settings & Security (Dialog 209)
-        ("Port Settings", "Dim Lower Prios for Standard", net_port.get('Dim lower Prios for "Standard"'), "Dim attenuation for standard priority"),
-        ("Port Settings", "Character Set", net_port.get('Character Set'), "Display text character encoding"),
-        ("Port Settings", "Inactive Keybanks Locked", "Yes" if net_port.get('Inactive Keybanks are locked') else "No", "Lock inactive banks"),
-        ("Port Settings", "Live View Password", net_port.get('Live View Password') or "None (Unlocked)", "Director courtesy lock password"),
-        ("Port Settings", "Panel Setup PIN", net_port.get('Panel PIN') or "None (Unlocked)", "Panel local setup lock PIN"),
-        ("Port Settings", "Bolero Multicast Range", f"{net_port.get('Bolero Multicast IP: from', '')} - {net_port.get('to', '')}", "Dynamic Bolero multicast pool"),
-    ]
-
-    for r_idx, (cat, param, val, desc) in enumerate(settings_rows, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-        write_cell(ws, r_idx, 1, cat, bg=bg, bold=True)
-        write_cell(ws, r_idx, 2, param, bg=bg)
-        write_cell(ws, r_idx, 3, val, bg=bg, bold=True, align="center" if "Port" in param or "Mode" in param else "left")
-        write_cell(ws, r_idx, 4, desc, bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 3: Nodes & Topology ─────────────────────────────────────────────────
-def build_nodes_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Nodes & Topology")
-    nodes = [r for r in recs if r['class'] == 3]
-    lwls = [r for r in recs if r['class'] == 5]
-
-    title_banner(ws, "Artist Mainframe Nodes & Optical Fibre Ring Topology",
-                 f"Total Frames: {len(nodes)}  |  Total Fibre Links: {len(lwls)}", max_col=14)
-
-    headers = [
-        "#", "Node Name", "Node #", "Node ID", "Chassis Model", "Serial Number",
-        "Ring SOA", "Allocated Ports (NOA)", "Controller A", "Controller B",
-        "PSU Configuration", "Error Alarms", "Relay 1 Alarms", "Relay 2 Alarms"
-    ]
-    header_row(ws, 4, headers, bg=C['teal'])
-
-    for r_idx, n in enumerate(nodes, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-        model = A.NODE_TYPE_NAMES.get(n.get('node_type', 0), 'Unknown Chassis')
-        ctrl_a = byid.get(n['controllers'][0]) if n.get('controllers') and n['controllers'][0] else None
-        ctrl_b = byid.get(n['controllers'][1]) if n.get('controllers') and len(n['controllers']) > 1 and n['controllers'][1] else None
-        psu_1 = byid.get(n['power_supplies'][0]) if n.get('power_supplies') and n['power_supplies'][0] else None
-        psu_2 = byid.get(n['power_supplies'][1]) if n.get('power_supplies') and len(n['power_supplies']) > 1 and n['power_supplies'][1] else None
-        psu_text = "Dual Redundant" if (psu_1 and psu_2) else ("Single PSU" if psu_1 else "None Fitted")
-
-        serial_str = n.get('serial_number') or "—"
-        err_alarms = n.get('error_alarms', [])
-        err_str = f"0x{n.get('error_mask', 0):08X} ({len(err_alarms)} active)" if 'error_mask' in n else "Default"
-        r1_alarms = n.get('relay1_alarms', [])
-        r1_str = f"{len(r1_alarms)} active" if r1_alarms else "None"
-        r2_alarms = n.get('relay2_alarms', [])
-        r2_str = f"{len(r2_alarms)} active" if r2_alarms else "None"
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, n.get('name', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, n.get('node_address', ''), bg=bg, align="center")
-        write_cell(ws, r_idx, 4, n.get('node_id', ''), bg=bg, align="center")
-        write_cell(ws, r_idx, 5, model, bg=bg)
-        write_cell(ws, r_idx, 6, serial_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 7, n.get('soa', 0), bg=bg, align="center")
-        write_cell(ws, r_idx, 8, n.get('noa', 0), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 9, A.card_model(ctrl_a, n) if ctrl_a else "Empty", bg=bg)
-        write_cell(ws, r_idx, 10, A.card_model(ctrl_b, n) if ctrl_b else "Empty", bg=bg)
-        write_cell(ws, r_idx, 11, psu_text, bg=bg)
-        write_cell(ws, r_idx, 12, err_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 13, r1_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 14, r2_str, bg=bg, align="center")
-
-    # Secondary table: Fibre Links
-    start_lwl = len(nodes) + 7
-    ws.merge_cells(start_row=start_lwl - 1, start_column=1, end_row=start_lwl - 1, end_column=6)
-    c_sub = ws.cell(row=start_lwl - 1, column=1, value="Optical Fibre Ring Links (CPhysLWL)")
-    c_sub.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    c_sub.fill = fill(C['slate'])
-    c_sub.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[start_lwl - 1].height = 22
-
-    lwl_headers = ["Link #", "Local Node", "Local Address", "Remote Node", "Remote Address", "Fibre Channel Pairs"]
-    header_row(ws, start_lwl, lwl_headers, bg=C['slate'])
-
-    for r_idx, l in enumerate(lwls, start_lwl + 1):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-        na = byid.get(l.get('node_a'))
-        nb = byid.get(l.get('node_b'))
-        write_cell(ws, r_idx, 1, r_idx - start_lwl, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, na.get('name') if na else "Unknown", bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, na.get('node_address') if na else "", bg=bg, align="center")
-        write_cell(ws, r_idx, 4, nb.get('name') if nb else "Unknown", bg=bg, bold=True)
-        write_cell(ws, r_idx, 5, nb.get('node_address') if nb else "", bg=bg, align="center")
-        write_cell(ws, r_idx, 6, len(l.get('lwl_pairs', [])), bg=bg, align="center")
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 4: Cards & Slots ────────────────────────────────────────────────────
-def build_cards_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Cards & Slots")
-    nodes = [r for r in recs if r['class'] == 3]
-
-    title_banner(ws, "Hardware Interface Cards & Chassis Bay Slots",
-                 "Per-slot card models, sub-bay allocations, network interfaces, and clock sync", max_col=11)
-
-    headers = ["#", "Node / Frame", "Bay #", "Sub-Bay", "Card Model", "Card Name", "Class Code", "Start Port", "Allocated Ports", "Network / Interface Settings", "Sync / Audio Format"]
-    header_row(ws, 4, headers, bg=C['teal'])
-
-    card_rows = []
-    for n in nodes:
-        for bay_idx, cid in enumerate(n.get('slots', []), 1):
-            if cid and cid in byid:
-                card = byid[cid]
-                card_rows.append((n, bay_idx, card))
-
-    for r_idx, (node, bay, c) in enumerate(card_rows, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-        model = A.card_model(c, node)
-        sub_bay = c.get('sub_bay', '—')
-        start_p = c.get('start_port', '—')
-        alloc_p = c.get('allocated_ports', '—')
-
-        # Network / Interface Settings string
-        net_info = []
-        sync_info = []
-        if 'ip' in c and c['ip']:
-            ip_str = '.'.join(str(x) for x in c['ip'].to_bytes(4, 'big'))
-            net_info.append(f"IP: {ip_str}")
-        if 'media' in c:
-            m_list = c['media'] if isinstance(c['media'], list) else [c['media']]
-            for m_idx, m in enumerate(m_list, 1):
-                if isinstance(m, dict):
-                    m_parts = []
-                    if m.get('ip'):
-                        m_ip = '.'.join(str(x) for x in (m['ip'] & 0xffffffff).to_bytes(4, 'big'))
-                        m_parts.append(m_ip)
-                    if m.get('dhcp'):
-                        m_parts.append("DHCP")
-                    if m.get('igmp_version'):
-                        m_parts.append(m['igmp_version'])
-                    if m.get('network_speed') and m['network_speed'] != 'Auto':
-                        m_parts.append(m['network_speed'])
-                    if m_parts:
-                        net_info.append(f"Media {m_idx}: {', '.join(m_parts)}")
-        if 'interface_details' in c:
-            for idx, idet in enumerate(c['interface_details'], 1):
-                net_info.append(f"Media {idx}: {idet.get('assigned_ports', 0)} ports")
-                if idet.get('sync_mode'):
-                    sync_info.append(f"Media {idx}: {idet['sync_mode']}")
-        # PTP & Clock Sync
-        ptp = c.get('ptp_settings')
-        if ptp:
-            ptp_str = f"PTP: domain {ptp.get('domain', 0)}, {ptp.get('mode_name', '')}, {ptp.get('role_name', '')} (prio1: {ptp.get('priority1')})"
-            sync_info.append(ptp_str)
-        # NMOS
-        nmos = c.get('nmos')
-        if nmos and isinstance(nmos, dict):
-            nmos_status = "Enabled" if nmos.get('enabled') else "Disabled"
-            net_info.append(f"NMOS: {nmos_status} ({nmos.get('registration_mode', 'Auto')})")
-        # Bolero Discovery
-        if c.get('bolero_discovery_ip'):
-            b_ip = '.'.join(str(x) for x in (c['bolero_discovery_ip'] & 0xffffffff).to_bytes(4, 'big'))
-            net_info.append(f"Bolero Discovery: {b_ip}:{c.get('bolero_discovery_port', 30321)}")
-        if c.get('class') == 0x107:  # Classic MADI
-            net_info.append(f"Up: {c.get('up_interface')}, Down: {c.get('down_interface')}")
-            sync_info.append(f"Frame: {c.get('frame_length')} ch, Block: {c.get('channel_block')}")
-        if c.get('dante_name'):
-            net_info.append(f"Dante: {c['dante_name']}")
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, node.get('name', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, f"Bay {bay}", bg=bg, align="center")
-        write_cell(ws, r_idx, 4, sub_bay, bg=bg, align="center")
-        write_cell(ws, r_idx, 5, model, bg=bg, bold=True)
-        write_cell(ws, r_idx, 6, c.get('name', ''), bg=bg)
-        write_cell(ws, r_idx, 7, f"0x{c['class']:03x}", bg=bg, align="center")
-        write_cell(ws, r_idx, 8, start_p, bg=bg, align="center")
-        write_cell(ws, r_idx, 9, alloc_p, bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 10, ' | '.join(net_info) if net_info else "—", bg=bg)
-        write_cell(ws, r_idx, 11, ' | '.join(sync_info) if sync_info else "—", bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 5: Ports ─────────────────────────────────────────────────────────────
-def build_ports_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Ports")
-    ports = [r for r in recs if r['class'] in A.PORT_TYPE_NAMES]
-    # Sort by port number or node-bay
-    sorted_ports = sorted(ports, key=lambda p: (p.get('port_number', 0), p.get('port_index', 0)))
-
-    title_banner(ws, "Artist Digital Matrix Ports Grid",
-                 f"Total Configured Ports: {len(ports)}  |  1:1 Replica of Riedel Director Ports Table", max_col=16)
-
-    headers = [
-        "Port #", "Local 8-char Label", "Long Name", "Alias", "Subtitle",
-        "Port Type", "Node-Bay", "Architecture", "Media Interface", "Input Gain", "Output Gain",
-        "Room Code", "Room Mode", "2nd Channel", "Keypad Shortcut", "Streaming / Network IP"
-    ]
-    header_row(ws, 4, headers, bg=C['navy'])
-
-    arch_names = {0: 'SIC AES67', 1: 'Classic Card', 2: 'Virtual / Connection'}
-
-    for r_idx, p in enumerate(sorted_ports, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        p_num = p['port_strings'][1] if p.get('port_strings') and len(p['port_strings']) > 1 else str(p.get('port_number', ''))
-        p_type = A.port_type(p, byid)
-        node_bay = A.port_node_bay(p, byid)
-        arch = arch_names.get(p.get('port_architecture'), '')
-        in_gain = f"{p['input_gain_db']:+.1f} dB" if 'input_gain_db' in p else "0.0 dB"
-        out_gain = f"{p['output_gain_db']:+.1f} dB" if 'output_gain_db' in p else "0.0 dB"
-        room = ('Room ' if p.get('room_code') else '') + A.room_code_label(p.get('room_code', 0))
-        shortcut = str(p['keypad_shortcut']) if p.get('keypad_shortcut') is not None else ""
-
-        # Streaming / IP details
-        stream_info = []
-        om2 = p.get('output_media_2')
-        if om2 and om2.get('multicast'):
-            stream_info.append(f"Bolero Mcast: {om2['multicast']}:{om2.get('multicast_port', 5004)}")
-            if om2.get('bolero_user_id'):
-                stream_info.append(f"User: {om2['bolero_user_id']}")
-        sip = p.get('port_d0c2c0')
-        if sip:
-            sip_parts = []
-            if sip.get('remote_host'):
-                sip_parts.append(f"SIP Host: {sip['remote_host']}")
-            if sip.get('local_sip_id'):
-                sip_parts.append(f"Local: {sip['local_sip_id']}")
-            if sip.get('remote_sip_id'):
-                sip_parts.append(f"Remote: {sip['remote_sip_id']}")
-            if sip.get('audio_codec'):
-                sip_parts.append(f"Codec: {sip['audio_codec']}")
-            if sip_parts:
-                stream_info.append(' | '.join(sip_parts))
-        if p.get('input_channel') is not None and p.get('output_channel') is not None:
-            stream_info.append(f"NSA Ch: {p['input_channel']}/{p['output_channel']}")
-        elif p.get('input_channel') is not None:
-            stream_info.append(f"NSA In Ch: {p['input_channel']}")
-        elif p.get('output_channel') is not None:
-            stream_info.append(f"NSA Out Ch: {p['output_channel']}")
-
-        write_cell(ws, r_idx, 1, p_num, bg=bg, bold=True, align="center")
-        write_cell(ws, r_idx, 2, p.get('name', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, p.get('port_str', ''), bg=bg)
-        write_cell(ws, r_idx, 4, p.get('alias', ''), bg=bg)
-        write_cell(ws, r_idx, 5, p.get('port_str2', ''), bg=bg)
-        write_cell(ws, r_idx, 6, p_type, bg=bg, bold=True)
-        write_cell(ws, r_idx, 7, node_bay, bg=bg)
-        write_cell(ws, r_idx, 8, arch, bg=bg, align="center")
-        write_cell(ws, r_idx, 9, p.get('media_interface') or '—', bg=bg, align="center")
-        write_cell(ws, r_idx, 10, in_gain, bg=bg, align="center")
-        write_cell(ws, r_idx, 11, out_gain, bg=bg, align="center")
-        write_cell(ws, r_idx, 12, room, bg=bg, align="center")
-        write_cell(ws, r_idx, 13, p.get('room_mode', ''), bg=bg, align="center")
-        write_cell(ws, r_idx, 14, "Yes" if p.get('second_audio_channel') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 15, shortcut, bg=bg, align="center")
-        write_cell(ws, r_idx, 16, ' | '.join(stream_info) if stream_info else "—", bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 6: Panels & Keys ────────────────────────────────────────────────────
-def build_panels_keys_sheet(wb, h, recs, byid, target_row_map=None):
-    ws = wb.create_sheet(title="Panels & Keys")
-    keys = [r for r in recs if r['class'] == 9 and r.get('commands')]
-
-    # Sort keys by holder and slot
-    sorted_keys = sorted(keys, key=lambda k: (k.get('holder', 0), k.get('slot', 0)))
-
-    title_banner(ws, "Hardware SmartPanels, Beltpacks & Active Key Assignments",
-                 f"Total Active Configured Keys: {len(sorted_keys)}", max_col=15)
-
-    headers = [
-        "Station / Panel Name", "Port #", "Station Model", "Key Slot", "Key Label",
-        "Key Subtitle", "Group Color", "Text Color", "Key Mode", "Latching Timeout",
-        "Monitoring State", "Primary Function", "Target Destination", "Priority", "Stacked Secondary Function"
-    ]
-    header_row(ws, 4, headers, bg=C['teal'])
-
-    for r_idx, k in enumerate(sorted_keys, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        holder = byid.get(k.get('holder'))
-        panel_name = "Unknown Station"
-        port_num = ""
-        panel_model = "Unknown Model"
-
-        if holder:
-            if holder['class'] in A.PORT_TYPE_NAMES:
-                panel_name = holder.get('port_str') or holder.get('name', '')
-                port_num = holder['port_strings'][1] if holder.get('port_strings') and len(holder['port_strings']) > 1 else ''
-                panel_model = A.port_type(holder, byid)
-            elif holder['class'] in A.EXPANSION_SLOTS or holder['class'] == 0x507:
-                host = byid.get(holder.get('host_panel'))
-                host_name = host.get('port_str') or host.get('name', '') if host else 'Host'
-                port_num = host['port_strings'][1] if host and host.get('port_strings') and len(host['port_strings']) > 1 else ''
-                panel_name = f"{host_name} (Exp #{holder.get('expansion_address', 0) + 1})"
-                panel_model = "Expansion Module"
-
-        cmds = [byid.get(cid) for cid in k.get('commands', []) if cid in byid]
-        fn1, target1, prio1, tkey1 = format_command(cmds[0], byid) if len(cmds) > 0 else ('Empty', '', '', None)
-        fn2, target2, prio2, tkey2 = format_command(cmds[1], byid) if len(cmds) > 1 else ('', '', '', None)
-        sec_str = f"{fn2}: {target2}" if fn2 else "—"
-
-        slot_num = k.get('slot', 0) + 1
-        timeout_str = A.LATCHING_TIMEOUTS[k['latching_timeout']] if k.get('latching_timeout', 0) < len(A.LATCHING_TIMEOUTS) else str(k.get('latching_timeout', ''))
-        mon_state = k.get('monitoring_state_name') or '—'
-        grp_c = A.swatch_color_name(k.get('group_colour'))
-        txt_c = f"#{k['text_colour'].upper()}" if k.get('text_colour') else "Default"
-        grp_fill, grp_fg = get_swatch_fill_fg(k.get('group_colour'))
-        txt_fill, txt_fg = None, "000000"
-        if k.get('text_colour'):
-            txt_fill = k['text_colour'].upper()
-            txt_fg = "FFFFFF" if is_dark_hex(txt_fill) else "000000"
-
-        write_cell(ws, r_idx, 1, panel_name, bg=bg, bold=True)
-        write_cell(ws, r_idx, 2, port_num, bg=bg, align="center")
-        write_cell(ws, r_idx, 3, panel_model, bg=bg)
-        write_cell(ws, r_idx, 4, f"Key {slot_num}", bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 5, k.get('label', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 6, k.get('subtitle', ''), bg=bg)
-        write_cell(ws, r_idx, 7, grp_c, bg=grp_fill or bg, fg=grp_fg if grp_fill else "000000", bold=bool(grp_fill), align="center")
-        write_cell(ws, r_idx, 8, txt_c, bg=txt_fill or bg, fg=txt_fg if txt_fill else "000000", bold=bool(txt_fill), align="center")
-        write_cell(ws, r_idx, 9, k.get('mode', 'Momentary'), bg=bg, align="center")
-        write_cell(ws, r_idx, 10, timeout_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 11, mon_state, bg=bg, align="center")
-        write_cell(ws, r_idx, 12, fn1, bg=bg, bold=True)
-        c_t1 = write_cell(ws, r_idx, 13, target1, bg=bg)
-        if target_row_map and tkey1 and tkey1 in target_row_map:
-            t_sheet, t_row = target_row_map[tkey1]
-            c_t1.hyperlink = f"#'{t_sheet}'!A{t_row}"
-            c_t1.font = Font(name="Calibri", size=9, bold=True, color="0000EE", underline="single")
-        write_cell(ws, r_idx, 14, prio1, bg=bg, align="center")
-        write_cell(ws, r_idx, 15, sec_str, bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 7: Conferences ──────────────────────────────────────────────────────
-def build_conferences_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Conferences")
-    confs = [r for r in recs if r['class'] == 0x012]
-    sorted_confs = sorted(confs, key=lambda c: c.get('label', ''))
-
-    title_banner(ws, "Production Conferences & Partylines",
-                 f"Total Conferences: {len(confs)}  |  Multi-user matrix partyline channels", max_col=10)
-
-    headers = ["#", "Conference Label", "Long Name", "Alias", "Color", "Trunk Enabled", "DynaConf", "Keypad Shortcut", "Member Count", "Configured Member Ports"]
-    header_row(ws, 4, headers, bg=C['navy'])
-
-    for r_idx, c in enumerate(sorted_confs, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        member_ports = []
-        for mid in c.get('members', []):
-            m = byid.get(mid)
-            if m:
-                p_num = m['port_strings'][1] if m.get('port_strings') and len(m['port_strings']) > 1 else ''
-                p_lbl = m.get('name', '')
-                member_ports.append(f"{p_lbl} ({p_num})" if p_num else p_lbl)
-
-        color_str = A.swatch_color_name(c.get('colour'))
-        c_fill, c_fg = get_swatch_fill_fg(c.get('colour'))
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, c.get('label', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, c.get('long_name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, c.get('alias', ''), bg=bg)
-        write_cell(ws, r_idx, 5, color_str, bg=c_fill or bg, fg=c_fg if c_fill else "000000", bold=bool(c_fill), align="center")
-        write_cell(ws, r_idx, 6, "Yes" if c.get('trunk_enabled') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 7, "Yes" if c.get('dynaconf') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 8, c.get('keypad_shortcut', '') if c.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
-        write_cell(ws, r_idx, 9, len(member_ports), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 10, ', '.join(member_ports) if member_ports else "—", bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 8: Groups ───────────────────────────────────────────────────────────
-def build_groups_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Groups")
-    groups = [r for r in recs if r['class'] == 0x011]
-    sorted_groups = sorted(groups, key=lambda g: g.get('label', ''))
-
-    title_banner(ws, "Directed Talkgroups",
-                 f"Total Groups: {len(groups)}  |  One-to-many broadcast channels", max_col=8)
-
-    headers = ["#", "Group Label", "Long Name", "Color", "Keypad Shortcut", "Member Count", "Trunk Address", "Member Ports List"]
-    header_row(ws, 4, headers, bg=C['amber'])
-
-    for r_idx, g in enumerate(sorted_groups, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        member_ports = []
-        for mid in g.get('members', []):
-            m = byid.get(mid)
-            if m:
-                p_num = m['port_strings'][1] if m.get('port_strings') and len(m['port_strings']) > 1 else ''
-                p_lbl = m.get('name', '')
-                member_ports.append(f"{p_lbl} ({p_num})" if p_num else p_lbl)
-
-        color_str = A.swatch_color_name(g.get('colour'))
-        g_fill, g_fg = get_swatch_fill_fg(g.get('colour'))
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, g.get('label', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, g.get('long_name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, color_str, bg=g_fill or bg, fg=g_fg if g_fill else "000000", bold=bool(g_fill), align="center")
-        write_cell(ws, r_idx, 5, g.get('keypad_shortcut', '') if g.get('keypad_shortcut') != 65535 else "", bg=bg, align="center")
-        write_cell(ws, r_idx, 6, len(member_ports), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 7, g.get('trunk_address', 0), bg=bg, align="center")
-        write_cell(ws, r_idx, 8, ', '.join(member_ports) if member_ports else "—", bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 9: IFB Routing ──────────────────────────────────────────────────────
-def build_ifb_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="IFB Routing")
-    ifbs = [r for r in recs if r['class'] == 0x066]
-    sorted_ifbs = sorted(ifbs, key=lambda i: i.get('ifb_number', 0))
-
-    title_banner(ws, "Interruptible Foldback (IFB) Channels",
-                 f"Total IFB Channels: {len(ifbs)}  |  Broadcast mix-minus and foldback audio routing", max_col=8)
-
-    headers = ["IFB #", "IFB Label", "Long Name", "Dim Level", "Trunk Enabled", "Input Endpoint", "Mix-Minus Endpoint", "Output Endpoint"]
-    header_row(ws, 4, headers, bg=C['purple'])
-
-    def endpoint_name(ep):
-        if not ep:
-            return "—"
-        role = ep.get('role', '')
-        t = ep.get('type')
-        if t == 1:
-            p = byid.get(ep.get('port'))
-            if p:
-                p_num = p['port_strings'][1] if p.get('port_strings') and len(p['port_strings']) > 1 else ''
-                return f"{p.get('name', '')} (Port {p_num})" if p_num else p.get('name', '')
-            return f"Port ID {ep.get('port')}"
-        elif t == 2:
-            grp = byid.get(ep.get('group'))
-            return f"Group: {grp.get('name', '')}" if grp else f"Group ID {ep.get('group')}"
-        elif t == 4:
-            return f"Trunk {ep.get('a')}:{ep.get('b')}"
-        return "—"
-
-    for r_idx, i in enumerate(sorted_ifbs, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        write_cell(ws, r_idx, 1, i.get('ifb_number', r_idx - 4), bg=bg, align="center", bold=True)
-        write_cell(ws, r_idx, 2, i.get('label', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, i.get('long_name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, i.get('dim_db', '0 dB'), bg=bg, align="center")
-        write_cell(ws, r_idx, 5, "Yes" if i.get('is_trunk_enabled') else "No", bg=bg, align="center")
-        write_cell(ws, r_idx, 6, endpoint_name(i.get('input')), bg=bg)
-        write_cell(ws, r_idx, 7, endpoint_name(i.get('mix_minus')), bg=bg)
-        write_cell(ws, r_idx, 8, endpoint_name(i.get('output')), bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 10: Audio Patch ─────────────────────────────────────────────────────
-def build_audiopatch_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Audio Patch")
-    patches = [r for r in recs if r['class'] == 0x019]
-
-    title_banner(ws, "Audio Patch DSP Mixing & Filtering Matrices",
-                 f"Total Audio Patches: {len(patches)}  |  Per-port mixing matrices and filter chains", max_col=7)
-
-    headers = ["#", "Panel / Port Name", "Patch Name", "Operating Mode", "Active Unmuted Crosspoints", "Muted Output Amps", "DSP Filters"]
-    header_row(ws, 4, headers, bg=C['slate'])
-
-    for r_idx, p in enumerate(patches, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        panel = byid.get(p.get('panel'))
-        panel_name = panel.get('port_str') or panel.get('name') if panel else f"Panel ID {p.get('panel')}"
-        mode_str = p.get('patch_mode_name', 'Speaker mode')
-        routes, muted_outs = A.audiopatch_routes(p)
-
-        dsp_info = []
-        for e in p.get('elements', []):
-            if e['kind'] == 'bandpass':
-                txt = A.audiopatch_element_text(e)
-                dsp_info.append(f"Bandpass: {txt}")
-            elif e['kind'] == 'lim_comp':
-                txt = A.audiopatch_element_text(e)
-                dsp_info.append(f"Dynamics: {txt}")
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, panel_name, bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, p.get('name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, mode_str, bg=bg, align="center")
-        write_cell(ws, r_idx, 5, ', '.join(routes[:6]) + (f" (+{len(routes)-6} more)" if len(routes) > 6 else "") if routes else "None", bg=bg)
-        write_cell(ws, r_idx, 6, ', '.join(muted_outs) if muted_outs else "None", bg=bg)
-        write_cell(ws, r_idx, 7, ' | '.join(dsp_info) if dsp_info else "Standard", bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 11: Logic & GPIO ────────────────────────────────────────────────────
-def build_logic_gpio_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Logic & GPIO")
-    gin = [r for r in recs if r['class'] == 0x00c]
-    gout = [r for r in recs if r['class'] == 0x00d]
-    lsrc = [r for r in recs if r['class'] == 0x040]
-    ldst = [r for r in recs if r['class'] == 0x041]
-    lline = [r for r in recs if r['class'] == 0x042]
-    monos = [r for r in recs if r['class'] == 0x086]
-    gates = [r for r in recs if r['class'] in A.LOGIC_GATE_NAMES and r['class'] != 0x086]
-    clocks = [r for r in recs if r['class'] == 0x087]
-
-    title_banner(ws, "Hardware GPIO Channels & Internal Matrix Logic",
-                 f"GPIO In: {len(gin)}  |  GPIO Out: {len(gout)}  |  Logic Sources: {len(lsrc)}  |  Destinations: {len(ldst)}  |  Gates: {len(gates)+len(monos)}  |  Logic Lines: {len(lline)}", max_col=7)
-
-    headers = ["#", "Type", "Channel / Pin #", "Label / Name", "Configuration / Mode", "Signal / Off-Delay / Trigger", "Host Device"]
-    header_row(ws, 4, headers, bg=C['teal'])
-
-    row_count = 5
-    # GPIO Inputs
-    for g in gin:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        p = byid.get(g.get('panel'))
-        p_name = p.get('name') if p else f"Panel {g.get('panel')}"
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "GPIO In", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, f"In {g.get('gpio_index', 0) + 1}", bg=bg, align="center")
-        write_cell(ws, row_count, 4, g.get('name', ''), bg=bg)
-        write_cell(ws, row_count, 5, "Inverted" if g.get('inverted') else "Normal", bg=bg, align="center")
-        write_cell(ws, row_count, 6, "—", bg=bg, align="center")
-        write_cell(ws, row_count, 7, p_name, bg=bg)
-        row_count += 1
-
-    # GPIO Outputs
-    for g in gout:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        p = byid.get(g.get('panel'))
-        p_name = p.get('name') if p else f"Panel {g.get('panel')}"
-        nc_str = "NC" if g.get('normally_closed') else "NO"
-        off_del = f"Off-Delay: {g.get('off_delay')} ms" if g.get('off_delay') else "No off-delay"
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "GPIO Out", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, f"Out {g.get('gpio_index', 0) + 1}", bg=bg, align="center")
-        write_cell(ws, row_count, 4, g.get('name', ''), bg=bg)
-        write_cell(ws, row_count, 5, f"{'Inverted, ' if g.get('inverted') else ''}{nc_str}", bg=bg, align="center")
-        write_cell(ws, row_count, 6, off_del, bg=bg, align="center")
-        write_cell(ws, row_count, 7, p_name, bg=bg)
-        row_count += 1
-
-    # Logic Sources
-    for s in lsrc:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        src_type = s.get('src_type_name') or f"Type {s.get('src_type', 0)}"
-        ch2_str = "2nd Ch" if s.get('second_audio_channel') else "Normal"
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "Logic Source", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, f"Type: {src_type}", bg=bg, align="center")
-        write_cell(ws, row_count, 4, s.get('name') or s.get('label', ''), bg=bg)
-        write_cell(ws, row_count, 5, ch2_str, bg=bg, align="center")
-        write_cell(ws, row_count, 6, f"Ref: {s.get('src_ref', '—')}", bg=bg, align="center")
-        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
-        row_count += 1
-
-    # Logic Destinations
-    for d in ldst:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        act = f"Active: {len(d.get('active_inputs') or [])}" if 'active_inputs' in d else ""
-        nact = f"NotActive: {len(d.get('not_active_inputs') or [])}" if 'not_active_inputs' in d else ""
-        trig = ', '.join(filter(None, [act, nact])) or "—"
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "Logic Destination", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, "Gate Dst", bg=bg, align="center")
-        write_cell(ws, row_count, 4, d.get('name') or d.get('label', ''), bg=bg)
-        write_cell(ws, row_count, 5, "—", bg=bg, align="center")
-        write_cell(ws, row_count, 6, trig, bg=bg, align="center")
-        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
-        row_count += 1
-
-    # Monoflop Gates
-    for m in monos:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        retrig = "Retrigger Extends" if m.get('retrigger_extends_time') else "Fixed Pulse"
-        time_str = f"Time: {m.get('monoflop_time', 0)} ms"
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "Monoflop Gate", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, "Timer Gate", bg=bg, align="center")
-        write_cell(ws, row_count, 4, m.get('name', ''), bg=bg)
-        write_cell(ws, row_count, 5, retrig, bg=bg, align="center")
-        write_cell(ws, row_count, 6, time_str, bg=bg, align="center")
-        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
-        row_count += 1
-
-    # Logic Gates (AND / OR / NOT / ...) and clocks
-    for g in gates:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "Logic Gate", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, g.get('gate_type', ''), bg=bg, align="center")
-        write_cell(ws, row_count, 4, g.get('name', ''), bg=bg)
-        write_cell(ws, row_count, 5, f"Inputs: {len(g.get('inputs') or [])}", bg=bg, align="center")
-        write_cell(ws, row_count, 6, f"Outputs: {len(g.get('outputs') or [])}", bg=bg, align="center")
-        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
-        row_count += 1
-    for c in clocks:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "Logic Clock", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, "Clock", bg=bg, align="center")
-        write_cell(ws, row_count, 4, c.get('name', ''), bg=bg)
-        write_cell(ws, row_count, 5, "—", bg=bg, align="center")
-        write_cell(ws, row_count, 6, "—", bg=bg, align="center")
-        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
-        row_count += 1
-
-    # Logic Lines
-    for l in lline:
-        bg = C['row_alt'] if row_count % 2 == 0 else C['row_white']
-        ws.row_dimensions[row_count].height = 20
-        write_cell(ws, row_count, 1, row_count - 4, bg=bg, align="center")
-        write_cell(ws, row_count, 2, "Logic Line", bg=bg, bold=True)
-        write_cell(ws, row_count, 3, f"Pin {l.get('from_pin')} -> Pin {l.get('to_pin')}", bg=bg, align="center")
-        write_cell(ws, row_count, 4, l.get('name', ''), bg=bg)
-        write_cell(ws, row_count, 5, "Connected", bg=bg, align="center")
-        write_cell(ws, row_count, 6, "Internal Logic Bus", bg=bg, align="center")
-        write_cell(ws, row_count, 7, "Matrix Core", bg=bg)
-        row_count += 1
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 12: IP Trunks ───────────────────────────────────────────────────────
-def build_trunks_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="IP Trunks")
-    ports = [r for r in recs if r['class'] in A.PORT_TYPE_NAMES]
-    trunks = [p for p in ports if p['class'] in (0x445, 0x502, 0x508) or p.get('trunk_address')]
-
-    title_banner(ws, "Inter-Matrix Digital IP Trunk Lines & VoIP",
-                 f"Total IP Trunks & Connections: {len(trunks)}", max_col=10)
-
-    headers = ["#", "Port #", "Trunk Line Name", "Short ID", "Trunk Type", "Local SIP ID", "Remote Host / IP", "Remote SIP ID", "Trunk Net Address", "Audio Codec / Parameters"]
-    header_row(ws, 4, headers, bg=C['teal'])
-
-    for r_idx, t in enumerate(trunks, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-
-        p_num = t['port_strings'][1] if t.get('port_strings') and len(t['port_strings']) > 1 else str(t.get('port_number', ''))
-        sip = t.get('port_d0c2c0') or {}
-        local_id = sip.get('local_sip_id', '—') or '—'
-        remote_ip = sip.get('remote_host', '—') or '—'
-        remote_sip = sip.get('remote_sip_id', '—') or '—'
-        codec = sip.get('audio_codec', 'Standard')
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, p_num, bg=bg, align="center")
-        write_cell(ws, r_idx, 3, t.get('port_str') or t.get('name', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 4, t.get('name', ''), bg=bg, align="center")
-        write_cell(ws, r_idx, 5, A.port_type(t, byid), bg=bg, bold=True)
-        write_cell(ws, r_idx, 6, local_id, bg=bg, align="center")
-        write_cell(ws, r_idx, 7, remote_ip, bg=bg, align="center")
-        write_cell(ws, r_idx, 8, remote_sip, bg=bg, align="center")
-        write_cell(ws, r_idx, 9, t.get('trunk_address', 0), bg=bg, align="center")
-        write_cell(ws, r_idx, 10, codec, bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 13: Users & Access ──────────────────────────────────────────────────
-def build_users_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Users & Access")
-    users = [r for r in recs if r['class'] == 0x023]
-
-    title_banner(ws, "Director System Operator Accounts & Security Profiles",
-                 f"Total Registered Accounts: {len(users)}", max_col=7)
-
-    headers = ["#", "Username", "Full Name", "Account Role", "Rights Mask", "Courtesy Lock PIN / Password", "Decoded Permissions"]
-    header_row(ws, 4, headers, bg=C['navy'])
-
-    for r_idx, u in enumerate(users, 5):
-        bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-        ws.row_dimensions[r_idx].height = 20
-        role = "User Account Manager" if u.get('user_manager') else "Standard User"
-        pwd = u.get('password') or "None (Unlocked)"
-        perms = ', '.join(u.get('permissions', [])) or "Standard Rights"
-
-        write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-        write_cell(ws, r_idx, 2, u.get('name', ''), bg=bg, bold=True)
-        write_cell(ws, r_idx, 3, u.get('full_name', ''), bg=bg)
-        write_cell(ws, r_idx, 4, role, bg=bg, bold=True, align="center")
-        write_cell(ws, r_idx, 5, f"0x{u.get('rights', 0):08x}", bg=bg, align="center")
-        write_cell(ws, r_idx, 6, pwd, bg=bg, align="center")
-        write_cell(ws, r_idx, 7, perms, bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Sheet 14: Scheduler & Events ──────────────────────────────────────────────
-def build_scheduler_sheet(wb, h, recs, byid):
-    ws = wb.create_sheet(title="Scheduler")
-    tasks = [r for r in recs if r['class'] == 0x05a]
-    events = [r for r in recs if r['class'] == 0x05d]
-
-    title_banner(ws, "Automated Scheduler Tasks & Triggered Events",
-                 f"Scheduler Tasks: {len(tasks)}  |  Matrix Events: {len(events)}", max_col=8)
-
-    headers = ["#", "Task Name", "Scheduled Time", "Day of Week", "Day of Month", "Month", "Year", "Linked Event Name"]
-    header_row(ws, 4, headers, bg=C['slate'])
-
-    if not tasks:
-        ws.row_dimensions[5].height = 20
-        write_cell(ws, 5, 1, "—", align="center")
-        write_cell(ws, 5, 2, "No automated scheduler tasks defined in this file", bold=True)
-        for c in range(3, 9):
-            write_cell(ws, 5, c, "—", align="center")
-    else:
-        for r_idx, t in enumerate(tasks, 5):
-            bg = C['row_alt'] if r_idx % 2 == 0 else C['row_white']
-            ws.row_dimensions[r_idx].height = 20
-            t_time = f"{t.get('hour', 0):02d}:{t.get('minute', 0):02d}:{t.get('second', 0):02d}"
-            ev = byid.get(t.get('event_id'))
-            ev_name = ev.get('name') if ev else f"Event ID {t.get('event_id')}"
-
-            write_cell(ws, r_idx, 1, r_idx - 4, bg=bg, align="center")
-            write_cell(ws, r_idx, 2, t.get('name', ''), bg=bg, bold=True)
-            write_cell(ws, r_idx, 3, t_time, bg=bg, align="center")
-            write_cell(ws, r_idx, 4, str(t.get('day_of_week', '*')), bg=bg, align="center")
-            write_cell(ws, r_idx, 5, str(t.get('day', '*')), bg=bg, align="center")
-            write_cell(ws, r_idx, 6, str(t.get('month', '*')), bg=bg, align="center")
-            write_cell(ws, r_idx, 7, str(t.get('year', '*')), bg=bg, align="center")
-            write_cell(ws, r_idx, 8, ev_name, bg=bg)
-
-    ws.freeze_panes = 'A5'
-    auto_width(ws)
-
-
-# ── Main Export Function ──────────────────────────────────────────────────────
-def export_art_to_excel(art_file_path, output_path=None):
-    """
-    Parses an Artist .Art save file using artist_reader and exports a complete,
-    ground-truth multi-sheet Excel workbook.
-    """
-    path = pathlib.Path(art_file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {art_file_path}")
-
-    data = path.read_bytes()
+    # Director's "Marker definition" table in plain words: how a panel key lights up in each key state
+    cols = [('marker', 'Key state'), ('priority', 'Priority'), ('persistence_timeout_s', 'Stays lit after event (s)'),
+            ('user_name', 'Custom name'), ('2000 series base color', '2000-series colour'),
+            ('2000 series flash to color', '2000-series flashes to'),
+            ('1000 series background', '1000-series key background'),
+            ('1000 series crosspoint level color', '1000-series level colour'),
+            ('1000 series muted crosspoint level color', '1000-series muted level colour'),
+            ('1000 series flash', '1000-series flashing'),
+            ('Show crosspoint level in foreground', '1000-series level shown in front'),
+            ('RIF LED state', 'RIF LED')]
+
+    def plain(key, v):
+        if key == '1000 series background' and isinstance(v, str) and len(set(v.split())) == 1:
+            return v.split()[0]                       # the same colour on all 8 background segments
+        return v
+    rows = [[plain(k, m.get(k)) for k, _ in cols] for m in marks]
+    write_table(wb, 'Key Light Colours', [h for _, h in cols], rows,
+                note='How a panel key lights up in each key state, system-wide (Director: Marker definition). '
+                     'Priority decides which state shows when several apply (lower numbers are the active states). '
+                     'Usually left at factory values.')
+
+
+def sheet_nodes(wb, ctx):
+    ports_on = Counter(A.port_card(p, ctx.byid).get('node') for p in ctx.ports if p.get('card') in ctx.byid)
+    rows = []
+    for n in ctx.nodes:
+        rows.append([
+            n.get('name'), n.get('node_address'), n.get('node_id'),
+            A.NODE_TYPE_NAMES.get(n.get('node_type'), 'type %s' % n.get('node_type')),
+            n.get('serial_number'), ports_on.get(n['id'], 0), n.get('soa'), n.get('noa'),
+            ', '.join(ctx.name(c) for c in n.get('controllers') or [] if c not in NO_REF),
+            ', '.join(ctx.name(c) for c in n.get('power_supplies') or [] if c not in NO_REF),
+            ', '.join(n.get('error_alarms') or []), ', '.join(n.get('relay1_alarms') or []),
+            ', '.join(n.get('relay2_alarms') or []),
+            ', '.join(ctx.name(i) for i in n.get('logic_destinations') or []),
+            n.get('changed_last_session'),
+        ])
+    write_table(wb, 'Nodes', ['Name', 'Node address', 'Node ID', 'Frame type', 'Serial number', 'Ports configured',
+                              'Ring start (SOA)', 'Ring allocation (NOA)',
+                              'Controllers', 'Power supplies', 'Error alarms', 'Relay 1 alarms', 'Relay 2 alarms',
+                              'Logic destinations', 'Changed last session'], rows, changed_col=14)
+    links = [[ctx.name(l.get('node_a')), ctx.name(l.get('node_b')), len(l.get('drawing_points') or []),
+              l.get('changed_last_session')] for l in ctx.by_class[5]]
+    if links:
+        write_table(wb, 'Fibre Links', ['Node A', 'Node B', 'Drawing waypoints', 'Changed last session'], links,
+                    changed_col=3)
+
+
+def card_network(c):
+    """Network settings of a card, in the reader's names."""
+    out = []
+    for i, m in enumerate(c.get('media') or [], 1):
+        bits = ['IP %s/%s gw %s' % (ip(m.get('ip')), ip(m.get('mask')), ip(m.get('gateway')))]
+        if m.get('dhcp'):
+            bits.append('DHCP')
+        for k, lab in (('sip_port', 'SIP port'), ('dscp', 'DSCP'), ('igmp_version', 'IGMP'), ('network_speed', 'speed')):
+            if m.get(k) is not None:
+                bits.append('%s %s' % (lab, m[k]))
+        out.append('Media %d: %s' % (i, ', '.join(bits)))
+    p = c.get('ptp_settings')
+    if p:
+        out.append('PTP: role %s, mode %s, domain %s, priority 1/2 %s/%s' % (
+            p.get('role_name'), p.get('mode_name'), p.get('domain'), p.get('priority1'), p.get('priority2')))
+    n = c.get('nmos')
+    if n:
+        out.append('NMOS: %s, port %s, registration %s' % ('enabled' if n.get('enabled') else 'disabled',
+                                                           n.get('port'), n.get('registration_mode')))
+    d = c.get('dns')
+    if d and (d.get('primary') or d.get('secondary') or d.get('suffix')):
+        out.append('DNS: %s / %s %s' % (ip(d.get('primary')), ip(d.get('secondary')), d.get('suffix') or ''))
+    if c.get('bolero_discovery_ip'):
+        out.append('Bolero discovery %s:%s' % (ip(c['bolero_discovery_ip']), c.get('bolero_discovery_port')))
+    if c.get('ip') and not c.get('media'):
+        out.append('IP %s/%s gw %s%s' % (ip(c.get('ip')), ip(c.get('mask')), ip(c.get('gateway')),
+                                          ' (DHCP)' if c.get('voip_dhcp') else ''))
+    for k in ('up_interface', 'down_interface', 'frame_length', 'channels', 'dante_name'):
+        if c.get(k) not in (None, ''):
+            out.append('%s: %s' % (k.replace('_', ' '), c[k]))
+    return ' | '.join(out)
+
+
+def sheet_cards(wb, ctx):
+    """One row per card, controller and power supply, with its role in the frame.
+
+    - Controllers and power supplies come from each frame's own lists (node 'controllers' / 'power_supplies':
+      CPU cards, PSUs; on Performer frames the second controller position can hold the ELA-OP card).
+    - Artist 1024 frames store no controller or PSU objects (both lists are 0); their two NICs (CPhysClientNic,
+      0x10c) are the frame controllers. (A NIC also keeps its own copy of the bay table, nic_slots: bay id and two
+      counts that look like channels in use / allocated, but they do not always agree with the cards, so they are
+      not shown.)
+    - Each SIC card on a 1024 frame owns CPhysClientSubSic (0x10d) records (parent = base_58), numbered port
+      groups of up to 8 ports of one kind. They are folded into their card as 'Port groups' instead of being
+      listed as cards of their own. Director keeps no power-supply objects for 1024 frames."""
+    ports_on = Counter(p.get('card') for p in ctx.ports)
+    groups_of = defaultdict(list)                        # SIC card id -> [(group no, count, port types)]
+    for sub in ctx.cards:
+        if sub['class'] != 0x10d or not ports_on.get(sub['id']):
+            continue
+        kinds = Counter()
+        for p in ctx.ports:
+            if p.get('card') == sub['id']:
+                try:
+                    kinds[A.port_type(p, ctx.byid)] += 1
+                except Exception:
+                    kinds[A.PORT_TYPE_NAMES.get(p['class'], 'class 0x%x' % p['class'])] += 1
+        groups_of[sub.get('base_58')].append(((sub.get('slot') or 0) + 1, ports_on[sub['id']], kinds))
+
+    def model_of(c, node):
+        try:
+            return A.card_model(c, node)
+        except Exception:
+            return 'class 0x%x' % c['class']
+
+    rows = []
+    listed = set()
+    for node in ctx.nodes:                               # controllers and power supplies, from the frame
+        for ri, (role, key) in enumerate((('Controller', 'controllers'), ('Power supply', 'power_supplies'))):
+            for i, oid in enumerate(node.get(key) or []):
+                c = ctx.byid.get(oid)
+                if not c:
+                    continue
+                listed.add(oid)
+                r = role if c['class'] != 0x201 else 'GPIO card'
+                label = ('Controller %s' % 'AB'[i]) if key == 'controllers' and i < 2 else (
+                    'PSU %d' % (i + 1) if key == 'power_supplies' else 'Controller %d' % (i + 1))
+                rows.append(((str(node.get('name')), 0, ri, i), [node.get('name'), label,
+                             None, r, model_of(c, node), c.get('name'), None, '', '0x%x' % c['class'], None, None,
+                             card_network(c), c.get('device_uuid'), c.get('changed_last_session')]))
+    for c in ctx.cards:
+        if c['class'] == 0x10d or c['id'] in listed:
+            continue                                     # port groups are folded into their SIC card
+        node = ctx.byid.get(c.get('node'), {})
+        model = model_of(c, node)
+        if c['class'] == 0x10c:
+            role = 'Controller (NIC)'
+        elif c['class'] == 0x201:
+            role = 'GPIO card'
+        else:
+            role = 'I/O card'
+        groups = sorted(groups_of.get(c['id'], []))
+        n_ports = ports_on.get(c['id'], 0) + sum(n for _, n, _ in groups)
+        group_text = '; '.join('Group %d: %s' % (g, ', '.join('%d x %s' % (k, t) for t, k in kinds.most_common()))
+                               for g, _, kinds in groups)
+        rows.append(((str(ctx.name(c.get('node'))), 1, c.get('slot', 0), c.get('sub_bay') or 0),
+                     [ctx.name(c.get('node')), (c.get('slot') or 0) + 1, c.get('sub_bay'), role, model, c.get('name'),
+                      n_ports if role == 'I/O card' or n_ports else None, group_text, '0x%x' % c['class'],
+                      c.get('start_port'), c.get('allocated_ports'), card_network(c), c.get('device_uuid'),
+                      c.get('changed_last_session')]))
+    rows = [r for _, r in sorted(rows, key=lambda x: x[0])]
+    write_table(wb, 'Cards', ['Node', 'Bay', 'Sub-bay', 'Role', 'Model', 'Name', 'Ports', 'Port groups (SIC cards)',
+                              'Class', 'Start port', 'Allocated ports', 'Network / sync', 'Device UUID',
+                              'Changed last session'],
+                rows, changed_col=13,
+                note='One row per card, controller and power supply. On Artist 1024 frames the two NICs are the '
+                     'controllers; Director stores no power-supply objects for 1024 frames. A SIC card\'s ports '
+                     'sit in numbered port groups, listed on the card.')
+
+
+def port_details(p, ctx):
+    """Type-specific settings of a port."""
+    out = []
+    s = p.get('port_d0c2c0')
+    if s:
+        out.append('VoIP: local SIP ID %s, remote %s / %s, codec %s, packet %s, buffer %s, VAD %s%s' % (
+            s.get('local_sip_id'), s.get('remote_host'), s.get('remote_sip_id'), s.get('audio_codec'),
+            s.get('audio_packet_size'), s.get('receive_buffer_size'), s.get('voice_act_detection'),
+            ', STUN %s' % s['stun_server'] if s.get('stun_server') else ''))
+    if p['class'] == 0x502:
+        out.append('SIP: user %s, display %s, domain %s, proxy %s, auth user %s, auth password %s, transport %s, '
+                   're-register %s s%s' % (p.get('sip_username'), p.get('display_name'), p.get('domain_server'),
+                                          p.get('proxy_server'), p.get('auth_username'), p.get('auth_password'),
+                                          p.get('sip_transport'), p.get('reregister_time_s'),
+                                          ', STUN %s' % p['stun_server'] if p.get('stun_server') else ''))
+    om2 = p.get('output_media_2')
+    if om2:
+        out.append('Bolero: multicast %s:%s, user ID %s, port to Bolero %s' % (
+            om2.get('multicast'), om2.get('multicast_port'), om2.get('bolero_user_id'),
+            om2.get('multicast_port_to_bolero')))
+    for k, lab in (('stream_rx', 'AES67 in'), ('stream_tx', 'AES67 out')):
+        st = p.get(k)
+        if st:
+            out.append('%s: %s:%s, %s ch, packet %s us, PT %s%s%s' % (
+                lab, ip(st.get('multicast')), st.get('multicast_port'), st.get('channels'), st.get('packet_time'),
+                st.get('payload_type'), ', RTSP %s' % st['rtsp_uri'] if st.get('rtsp_uri') else '',
+                ', play mode %s' % st['play_mode_name'] if st.get('play_mode_name') else ''))
+    a = p.get('audio_settings')
+    if a:
+        out.append('AES67 settings: %s:%s, packet %s, buffer %s%s' % (
+            ip(a.get('ip_address')), a.get('listen_port'), a.get('packet_time'), a.get('receive_buffer'),
+            ', play mode %s' % a['play_mode_name'] if a.get('play_mode_name') else ''))
+    if p['class'] == 0x508:
+        out.append('Codec: auto answer %s, auto dial %s %s' % (p.get('auto_answer'), p.get('auto_dial_enabled'),
+                                                               p.get('auto_dial_number') or ''))
+    if p.get('input_channel') is not None or p.get('output_channel') is not None:
+        out.append('NSA channels in/out %s/%s' % (p.get('input_channel', '-'), p.get('output_channel', '-')))
+    for k in ('phone_number_1', 'phone_number_2'):
+        if p.get(k):
+            out.append('%s: %s' % (k.replace('_', ' '), p[k]))
+    ui = p.get('panel_ui')
+    if ui:
+        bits = ['%s %s' % (k.replace('_', ' '), ui[k]) for k in (
+            'panel_operation_mode', 'show_colors_on', 'enable_colors', 'show_volume_bars',
+            'incoming_call_signalization', 'live_view_password', 'panel_menu_pin') if k in ui]
+        out.append('Panel UI: ' + ', '.join(bits))
+    if p.get('adjust_from_command_elements'):
+        out.append('Audio patch elements adjustable from command: %s' % p['adjust_from_command_elements'])
+    return ' | '.join(out)
+
+
+def sheet_ports(wb, ctx):
+    holders = set(k['holder'] for k in ctx.keys)
+    panel_cols = None
+    rows = []
+    for p in sorted(ctx.ports, key=ctx.port_sort_key):
+        try:
+            node_bay, ptype = A.port_node_bay(p, ctx.byid), A.port_type(p, ctx.byid)
+        except Exception:
+            node_bay, ptype = '', A.PORT_TYPE_NAMES.get(p['class'], 'class 0x%x' % p['class'])
+        ps = p.get('port_strings') or []
+        settings = A.panel_settings(p) if p['id'] in holders else {}
+        if settings and panel_cols is None:
+            panel_cols = list(settings.keys())
+        rows.append((p, [ps[1] if len(ps) > 1 else '', p.get('name'), p.get('port_str'), p.get('alias'),
+                         p.get('port_str2'), ptype, node_bay, p.get('trunk_address'),
+                         '%+.1f dB' % p['input_gain_db'] if 'input_gain_db' in p else '',
+                         '%+.1f dB' % p['output_gain_db'] if 'output_gain_db' in p else '',
+                         A.room_code_label(p.get('room_code')), p.get('room_mode'), p.get('second_audio_channel'),
+                         p.get('keypad_shortcut'), p.get('media_interface'), ctx.name(p.get('phone_book')),
+                         ', '.join(ctx.name(s) for s in p.get('scroll_lists') or [] if s not in NO_REF),
+                         port_details(p, ctx)], settings))
+    panel_cols = panel_cols or []
+    headers = ['Port', 'Local 8-char label', 'Long name', 'Alias', 'Subtitle', 'Port type', 'Node-Bay',
+               'Trunking object address', 'Input gain', 'Output gain', 'Room code', 'Room mode', '2nd audio channel',
+               'Keypad shortcut', 'Media interface', 'Phone book', 'Scroll lists', 'Type-specific settings']
+    out = [base + [st.get(c, '') for c in panel_cols] + [p.get('changed_last_session')] for p, base, st in rows]
+    write_table(wb, 'Ports', headers + panel_cols + ['Changed last session'], out,
+                changed_col=len(headers) + len(panel_cols),
+                note='Port, labels, long name, subtitle, type, Node-Bay, trunking address, gains and room code '
+                     'match Director\'s Ports grid (tools/check_ports_csv.py). Panel settings only for ports with keys.')
+
+
+def sheet_keys(wb, ctx):
+    """Keys as columns: one row per panel / beltpack / expansion panel, and Label / Mode / Function for every key
+    position used anywhere in the file (bank 1 keys first, then bank 2). Empty keys stay blank."""
+    counts = ctx.key_counts_cache()
+    per_holder = defaultdict(dict)                       # holder id -> {(bank, key): (label, mode, functions)}
+    for k in ctx.keys:
+        cmds = [ctx.byid[c] for c in k.get('commands') or [] if c in ctx.byid]
+        if not cmds and not k.get('label'):
+            continue                                     # empty key slot
+        key_no, bank = key_number(k['slot'], counts.get(k['holder'], 0))
+        fns = ' | '.join('%s: %s' % (f, t) if t else f for f, t, _ in (describe_command(c, ctx) for c in cmds))
+        per_holder[k['holder']][(bank, key_no)] = (k.get('label'), k.get('mode'), fns or '(no function)')
+    positions = sorted({pos for keys in per_holder.values() for pos in keys})
+    headers = ['Port', 'Label', 'Long name', 'Type', 'Keys used']
+    for bank, n in positions:
+        tag = 'Key %d' % n + ('' if bank == 1 else ' bank %d' % bank)
+        headers += ['%s Label' % tag, '%s Mode' % tag, '%s Function' % tag]
+    rows = []
+    for hid, keys in per_holder.items():
+        h = ctx.byid.get(hid, {})
+        host = h
+        if ctx.reader.get(hid) == 'read_expansion':
+            host = ctx.byid.get(h.get('host_panel'), {})
+            model = A.EXPANSION_NAMES.get(h.get('class')) or 'Expansion panel'
+            label, long_name = host.get('name') or '', '%s #%s on %s' % (model, h.get('expansion_address', ''),
+                                                                        host.get('port_str') or host.get('name') or '')
+            typ = model
+        else:
+            label, long_name = h.get('name') or '', h.get('port_str') or ''
+            try:
+                typ = A.port_type(h, ctx.byid)
+            except Exception:
+                typ = A.PORT_TYPE_NAMES.get(h.get('class'), 'class 0x%x' % h.get('class', 0))
+        ps = host.get('port_strings') or []
+        port = ps[1] if len(ps) > 1 else ''
+        try:
+            order = ctx.port_sort_key(host) if host.get('class') in A.PORT_TYPE_NAMES else ('~',)
+        except Exception:
+            order = ('~',)
+        is_bp = host.get('class') == 0x440
+        row = [port, label, long_name, typ, len(keys)]
+        for pos in positions:
+            row += list(keys.get(pos, ('', '', '')))
+        rows.append(((is_bp, order, host is not h, h.get('expansion_address') or 0), row))
+    rows = [r for _, r in sorted(rows, key=lambda x: x[0])]
+    ws = write_table(wb, 'Keys', headers, rows,
+                     note='One row per panel, beltpack and expansion panel; Label / Mode / Function for each key. '
+                          'Bank 2 = the upper half of the stored key slots (inferred from usage). '
+                          'Per-key colours, timeouts and other options are on the Key Details sheet.')
+    ws.freeze_panes = 'F4'                               # keep the panel columns in view while scrolling right
+
+
+def sheet_key_details(wb, ctx):
+    counts = ctx.key_counts_cache()
+    rows, funcs = [], []
+    for k in sorted(ctx.keys, key=lambda k: (ctx.name(k['holder']), k['slot'])):
+        key_no, bank = key_number(k['slot'], counts.get(k['holder'], 0))
+        cmds = [ctx.byid[c] for c in k.get('commands') or [] if c in ctx.byid]
+        desc = [describe_command(c, ctx) for c in cmds]
+        if not cmds and not k.get('label'):
+            continue                                     # empty key slot
+        rows.append([ctx.name(k['holder']), key_no, bank, k['slot'], k.get('label'), k.get('subtitle'),
+                     k.get('mode'), A._pick(A.LATCHING_TIMEOUTS, k.get('latching_timeout', 0)),
+                     k.get('dim'), k.get('auto_label'), A.swatch_color_name(k.get('group_colour')),
+                     '#' + k['text_colour'].upper() if k.get('text_colour') else 'Default',
+                     k.get('icon'), k.get('monitoring_state_name'), k.get('radio_button') or '',
+                     A._pick(A.MUTED_KEY_ACTIONS, k['action_by_key_pressed']) if 'action_by_key_pressed' in k else '',
+                     k.get('restore_volume_level'), k.get('restart_latching_timer'),
+                     ' | '.join('%s: %s' % (f, t) if t else f for f, t, _ in desc),
+                     ' | '.join(d for _, _, d in desc), k.get('changed_last_session')])
+    write_table(wb, 'Key Details', ['Panel / holder', 'Key', 'Bank', 'Stored slot', 'Label', 'Subtitle', 'Mode',
+                             'Latching timeout', 'Dim', 'Auto label', 'Group colour', 'Text colour', 'Icon',
+                             'Monitoring state', 'Radio button group', 'Action when muted', 'Restore volume level',
+                             'Restart latching timer', 'Functions', 'Function details', 'Changed last session'],
+                rows, changed_col=20,
+                note='One row per key that has a label or a function. Key = stored slot within half of the holder\'s '
+                     'slots; Bank 2 = the upper half (inferred from usage). "Stored slot" is the raw position.')
+
+
+def sheet_functions(wb, ctx):
+    rows = []
+    for c in ctx.recs:
+        if not ctx.reader[c['id']].startswith('read_cmd'):
+            continue
+        fn, target, details = describe_command(c, ctx)
+        rows.append([ctx.cmd_owner.get(c['id'], '(not assigned)'), fn, target, c.get('priority', ''), details,
+                     c.get('changed_last_session')])
+    write_table(wb, 'Functions', ['Where', 'Function', 'Target', 'Priority', 'Details', 'Changed last session'], rows,
+                changed_col=5, note='Every function (command) record, with where it is assigned.')
+
+
+def sheet_conferences(wb, ctx):
+    rows = []
+    for c in sorted(ctx.by_class[0x12], key=lambda c: c.get('label', '')):
+        det = c.get('member_details') or [{'member': m} for m in c.get('members') or []]
+        mem = ['%s [%s%s%s]' % (ctx.name(d['member']), 'T' if d.get('talk') else '-', 'L' if d.get('listen') else '-',
+                                ', 2nd ch' if d.get('use_second_channel') else '') for d in det]
+        rows.append([c.get('label'), c.get('long_name'), c.get('alias'), A.swatch_color_name(c.get('colour')),
+                     c.get('icon'), c.get('trunk_enabled'), c.get('trunk_address'), c.get('dynaconf'),
+                     c.get('mcr_use'), ctx.name(c.get('gpio_out')), len(det), '; '.join(mem),
+                     c.get('changed_last_session')])
+    write_table(wb, 'Conferences', ['Label', 'Long name', 'Alias', 'Colour', 'Icon', 'Trunk enabled', 'Trunk address',
+                                    'DynaConf', 'MCR use', 'GPIO out', 'Members', 'Member list [Talk/Listen]',
+                                    'Changed last session'], rows, changed_col=12)
+
+
+def sheet_groups(wb, ctx):
+    rows = []
+    for g in sorted(ctx.by_class[0x11], key=lambda g: g.get('label', '')):
+        sec = g.get('member_second_channel') or [False] * len(g.get('members') or [])
+        mem = ['%s%s' % (ctx.name(m), ' [2nd ch]' if s else '') for m, s in zip(g.get('members') or [], sec)]
+        rows.append([g.get('label'), g.get('long_name'), A.swatch_color_name(g.get('colour')), g.get('icon'),
+                     g.get('keypad_shortcut') if g.get('keypad_shortcut') != 0xffff else '', g.get('trunk_enabled'),
+                     g.get('trunk_address'), ctx.name(g.get('gpio_out')), len(mem), '; '.join(mem),
+                     g.get('changed_last_session')])
+    write_table(wb, 'Groups', ['Label', 'Long name', 'Colour', 'Icon', 'Keypad shortcut', 'Trunk enabled',
+                               'Trunk address', 'GPIO out', 'Members', 'Member list', 'Changed last session'],
+                rows, changed_col=10)
+
+
+def endpoint(e, ctx):
+    if not e:
+        return ''
+    if 'port' in e:
+        return ctx.name(e['port'])
+    if 'group' in e:
+        return 'Group ' + ctx.name(e['group'])
+    return 'Trunk (not kept by Director)'
+
+
+def sheet_ifbs(wb, ctx):
+    rows = []
+    for i in sorted(ctx.by_class[0x66], key=lambda i: i.get('ifb_number', 0)):
+        rows.append([i.get('ifb_number'), i.get('label'), i.get('long_name'), endpoint(i.get('input'), ctx),
+                     endpoint(i.get('mix_minus'), ctx), endpoint(i.get('output'), ctx), i.get('dim_db'),
+                     i.get('sidetone'), i.get('is_trunk_enabled'), i.get('changed_last_session')])
+    write_table(wb, 'IFBs', ['Number', 'Label', 'Long name', 'Input', 'Mix minus', 'Output', 'Dim level', 'Sidetone',
+                             'Trunk enabled', 'Changed last session'], rows, changed_col=9)
+
+
+def sheet_scroll_lists(wb, ctx):
+    rows = []
+    for s in ctx.by_class[0x10]:
+        for n, e in enumerate(s.get('entries') or [], 1):
+            c = ctx.byid.get(e['command'])
+            fn, target, det = describe_command(c, ctx) if c else ('', '', '')
+            rows.append([s.get('name'), s.get('is_global'), n, e.get('label'), fn, target, det, e.get('key_mode'),
+                         e.get('latching_timeout'), e.get('dim_speaker'), e.get('auto_label'),
+                         e.get('keypad_shortcut'), s.get('changed_last_session')])
+        if not s.get('entries'):
+            rows.append([s.get('name'), s.get('is_global'), '', '(empty)', '', '', '', '', '', '', '', '',
+                         s.get('changed_last_session')])
+    write_table(wb, 'Scroll Lists', ['Scroll list', 'Global', 'Entry', 'Label', 'Function', 'Target', 'Details',
+                                     'Key mode', 'Latching timeout', 'Dim panel speaker', 'Label defined automatically',
+                                     'Keypad shortcut', 'Changed last session'], rows, changed_col=12)
+
+
+def sheet_audio_patches(wb, ctx):
+    rows = []
+    for p in ctx.by_class[0x19]:
+        try:
+            routes, muted = A.audiopatch_routes(p)
+        except Exception:
+            routes, muted = [], []
+        rows.append([ctx.name(p.get('panel')), p.get('name'), p.get('patch_mode_name'), '; '.join(routes),
+                     ', '.join(muted), p.get('changed_last_session')])
+    write_table(wb, 'Audio Patches', ['Panel', 'Patch', 'Mode', 'Active crosspoints', 'Muted outputs',
+                                      'Changed last session'], rows, changed_col=5)
+
+
+def sheet_logic_gpio(wb, ctx):
+    rows = []
+    for s in ctx.by_class[0x40]:
+        rows.append(['Logic source', s.get('name') or s.get('label'), s.get('src_type_name'),
+                     '2nd audio channel' if s.get('second_audio_channel') else '', ctx.name(s.get('src_ref')),
+                     s.get('changed_last_session')])
+    for d in ctx.by_class[0x41]:
+        cmds = [describe_command(ctx.byid[c], ctx) for c in d.get('commands') or [] if c in ctx.byid]
+        rows.append(['Logic destination', d.get('name'), 'active from: %s' % ', '.join(ctx.name(i) for i in d.get('active_inputs') or []),
+                     'not active from: %s' % ', '.join(ctx.name(i) for i in d.get('not_active_inputs') or []),
+                     ' | '.join('%s: %s' % (f, t) for f, t, _ in cmds), d.get('changed_last_session')])
+    for g in ctx.recs:
+        if g['class'] in A.LOGIC_GATE_NAMES:
+            extra = ''
+            if g['class'] == 0x86:
+                extra = 'time %s, %s' % (g.get('monoflop_time'), 'retrigger extends time' if g.get('retrigger_extends_time') else 'fixed')
+            rows.append(['Logic gate', g.get('name', ''), g.get('gate_type'), extra,
+                         'inputs %d, outputs %d' % (len(g.get('inputs') or []), len(g.get('outputs') or [])),
+                         g.get('changed_last_session')])
+    for c in ctx.by_class[0x87]:
+        rows.append(['Logic clock', '', 'Clock', '', ctx.name(c.get('dst')), c.get('changed_last_session')])
+    for l in ctx.by_class[0x42]:
+        rows.append(['Logic line', '', '%s (pin %s) -> %s (pin %s)' % (ctx.name(l.get('from')), l.get('from_pin'),
+                                                                    ctx.name(l.get('to')), l.get('to_pin')),
+                     '', '', l.get('changed_last_session')])
+    for g in ctx.by_class[0xc]:
+        rows.append(['GPIO in', g.get('name'), 'input %s' % ((g.get('gpio_index') or 0) + 1),
+                     'inverted' if g.get('inverted') else 'normal', ctx.name(g.get('panel') or g.get('card_gpio')),
+                     g.get('changed_last_session')])
+    for g in ctx.by_class[0xd]:
+        rows.append(['GPIO out', g.get('name') or g.get('label'), 'output %s' % ((g.get('gpio_index') or 0) + 1),
+                     '%s%s' % ('normally closed' if g.get('normally_closed') else 'normally open',
+                               ', off delay %s' % g['off_delay'] if g.get('off_delay') else ''),
+                     ctx.name(g.get('panel') or g.get('card_gpio')), g.get('changed_last_session')])
+    write_table(wb, 'Logic & GPIO', ['Kind', 'Name', 'Type / connection', 'Settings', 'Linked to',
+                                     'Changed last session'], rows, changed_col=5)
+
+
+def sheet_users(wb, ctx):
+    rows = [[u.get('name'), u.get('full_name'), u.get('password'), u.get('user_manager'),
+             ', '.join(u.get('permissions') or []), u.get('changed_last_session')] for u in ctx.by_class[0x23]]
+    write_table(wb, 'Users', ['User', 'Full name', 'Password', 'User account manager', 'Permissions',
+                              'Changed last session'], rows, changed_col=5,
+                note='Passwords are courtesy lock-outs, shown in plain text as stored (decoded from Director\'s '
+                     'character-inverted form).')
+
+
+RESOURCE_ORDER = ['Frames', 'Controllers', 'Power supplies', 'Cards', 'Panels', 'Expansion panels',
+                  'Bolero beltpacks', 'Wired beltpacks', 'Other ports']
+
+
+def resource_counts(ctx):
+    """[(category, item, quantity)] for every kind of hardware and port in the file, e.g.
+    ('Cards', 'AES67-108 G2', 4), ('Panels', 'RSP-2318 Pro', 37), ('Bolero beltpacks', 'Bolero Wireless Beltpack', 80).
+    Panels are the port types that hold keys; Artist 1024 NICs count as controllers (Director stores no
+    controller or power-supply objects for 1024 frames)."""
+    cnt = Counter()
+    for n in ctx.nodes:
+        cnt[('Frames', A.NODE_TYPE_NAMES.get(n.get('node_type'), 'Frame type %s' % n.get('node_type')))] += 1
+        for key, cat in (('controllers', 'Controllers'), ('power_supplies', 'Power supplies')):
+            for oid in n.get(key) or []:
+                c = ctx.byid.get(oid)
+                if c:
+                    try:
+                        model = A.card_model(c, n)
+                    except Exception:
+                        model = 'class 0x%x' % c['class']
+                    cnt[('Cards' if c['class'] == 0x201 else cat, model)] += 1
+    counted = {oid for n in ctx.nodes for key in ('controllers', 'power_supplies') for oid in n.get(key) or []}
+    for c in ctx.cards:
+        if c['class'] == 0x10d or c['id'] in counted:
+            continue                                     # SIC port groups are part of their card
+        node = ctx.byid.get(c.get('node'), {})
+        try:
+            model = A.card_model(c, node)
+        except Exception:
+            model = 'class 0x%x' % c['class']
+        cnt[('Controllers', model + ' (Artist 1024 controller)') if c['class'] == 0x10c else ('Cards', model)] += 1
+    key_classes = {ctx.byid[k['holder']]['class'] for k in ctx.keys if k['holder'] in ctx.byid}
+    for p in ctx.ports:
+        try:
+            typ = A.port_type(p, ctx.byid)
+        except Exception:
+            typ = A.PORT_TYPE_NAMES.get(p['class'], 'class 0x%x' % p['class'])
+        if 'Bolero' in typ:
+            cat = 'Bolero beltpacks'
+        elif 'Beltpack' in typ:
+            cat = 'Wired beltpacks'
+        elif p['class'] in key_classes:
+            cat = 'Panels'
+        else:
+            cat = 'Other ports'
+        cnt[(cat, typ)] += 1
+    for e in ctx.recs:
+        if ctx.reader.get(e['id']) == 'read_expansion':
+            model = (A.EXPANSION_NAMES.get(e['class']) or A.PORT_TYPE_NAMES.get(e['class'])
+                     or 'Expansion panel (class 0x%x)' % e['class'])
+            cnt[('Expansion panels', model)] += 1
+    return sorted(((cat, item, n) for (cat, item), n in cnt.items()),
+                  key=lambda r: (RESOURCE_ORDER.index(r[0]) if r[0] in RESOURCE_ORDER else 99, -r[2], r[1]))
+
+
+def sheet_resources(wb, ctx):
+    rows = resource_counts(ctx)
+    totals = Counter()
+    for cat, _, n in rows:
+        totals[cat] += n
+    out = []
+    for cat in RESOURCE_ORDER:
+        items = [r for r in rows if r[0] == cat]
+        if items:
+            out += [[cat if i == 0 else '', item, n] for i, (_, item, n) in enumerate(items)]
+            out.append(['', 'Total %s' % cat.lower(), totals[cat]])
+    ws = write_table(wb, 'Resources', ['Category', 'Item', 'Quantity'], out,
+                     note='How many of each frame, controller, power supply, card, panel, expansion panel, beltpack and '
+                          'port type the file contains. Artist 1024 frames store no power supplies.')
+    for r in range(4, 4 + len(out)):
+        if str(ws.cell(r, 2).value or '').startswith('Total '):
+            ws.cell(r, 2).font = ws.cell(r, 3).font = Font(bold=True)
+
+
+VF_COLUMNS = ['Always', 'On VOX', 'On Call']          # Director's Virtual Functions group (dialog 384)
+
+
+def virtual_function_rows(ctx):
+    """One entry per panel / beltpack that has virtual functions: {port, label, long name, type, and the
+    functions under Always / On VOX / On Call}. A virtual function (CPhysVirtFn 0x24) is a key without a button;
+    vf_slot says when it acts. Slot 2 has no name in Director and is not shown unless it holds functions."""
+    per = defaultdict(lambda: defaultdict(list))
+    changed = defaultdict(bool)
+    for v in ctx.by_class[0x24]:
+        cmds = [describe_command(ctx.byid[c], ctx) for c in v.get('commands') or [] if c in ctx.byid]
+        if not cmds:
+            continue                                     # empty virtual function slot
+        slot = v.get('vf_slot')
+        slot = slot if slot in VF_COLUMNS else 'Slot %s' % slot
+        per[v.get('panel')][slot] += ['%s: %s' % (f, t) if t else f for f, t, _ in cmds]
+        changed[v.get('panel')] |= bool(v.get('changed_last_session'))
+    out = []
+    for pid, slots in per.items():
+        p = ctx.byid.get(pid, {})
+        ps = p.get('port_strings') or []
+        try:
+            typ = A.port_type(p, ctx.byid)
+        except Exception:
+            typ = A.PORT_TYPE_NAMES.get(p.get('class'), 'class 0x%x' % p.get('class', 0))
+        try:
+            order = ctx.port_sort_key(p)
+        except Exception:
+            order = ('~',)
+        out.append({'order': (p.get('class') == 0x440, order), 'port': ps[1] if len(ps) > 1 else '',
+                    'label': p.get('name') or '', 'long_name': p.get('port_str') or '', 'type': typ,
+                    'slots': {k: v for k, v in slots.items()}, 'changed': changed[pid]})
+    out.sort(key=lambda r: r['order'])
+    return out
+
+
+def sheet_virtual_functions(wb, ctx):
+    rows = virtual_function_rows(ctx)
+    extra = sorted({k for r in rows for k in r['slots'] if k not in VF_COLUMNS})
+    cols = VF_COLUMNS + extra
+    write_table(wb, 'Virtual Functions', ['Port', 'Label', 'Long name', 'Type'] + cols + ['Changed last session'],
+                [[r['port'], r['label'], r['long_name'], r['type']] + [' | '.join(r['slots'].get(c, [])) for c in cols]
+                 + [r['changed']] for r in rows],
+                changed_col=4 + len(cols),
+                note='Functions that act without a key press, per panel and beltpack: Always (all the time), '
+                     'On VOX (when the port\'s VOX opens), On Call (when the port is called). Director: Virtual Functions.')
+
+
+def sheet_other(wb, ctx):
+    rows = []
+    for b in ctx.by_class[0x1a]:
+        rows.append(['Phone book', b.get('name'), '', '; '.join(str(e) for e in b.get('entries') or []),
+                     b.get('changed_last_session')])
+    for r in ctx.recs:
+        rn = ctx.reader[r['id']]
+        if rn == 'read_port_shortlist':
+            rows.append(['Port shortlist', r.get('name'), '', ', '.join(ctx.name(i) for i in r.get('panels') or []),
+                         r.get('changed_last_session')])
+        elif rn == 'read_group_conf_shortlist':
+            rows.append(['Group / conference shortlist', r.get('name'), '',
+                         ', '.join(ctx.name(i) for i in r.get('members') or r.get('items') or []),
+                         r.get('changed_last_session')])
+        elif rn == 'read_scheduler_task':
+            rows.append(['Scheduled task', r.get('name'), '%s-%s-%s %s:%s:%s' % (
+                r.get('year'), r.get('month'), r.get('day'), r.get('hour'), r.get('minute'), r.get('second')),
+                'event: %s' % ctx.name(r.get('event_id')), r.get('changed_last_session')])
+        elif rn == 'read_event':
+            rows.append(['Event', r.get('name'), 'active' if r.get('active') else 'inactive',
+                         '; '.join(str(a) for a in r.get('actions') or []), r.get('changed_last_session')])
+        elif rn in ('read_nsa_device', 'read_connect_voip_device'):
+            keys = [k for k in r if k in ('media1_ip', 'media2_ip', 'webui_ip', 'ip_address', 'input_multicast_ip',
+                                          'output_multicast_ip')]
+            rows.append(['NSA device' if rn == 'read_nsa_device' else 'VoIP device', r.get('name'), '',
+                         ', '.join('%s %s' % (k, ip(r[k])) for k in keys), r.get('changed_last_session')])
+    if rows:
+        write_table(wb, 'Other Objects', ['Kind', 'Name', 'Detail', 'Contents', 'Changed last session'], rows,
+                    changed_col=4)
+
+
+def sheet_all_records(wb, ctx):
+    skip = {'id', 'class', 'group', 'category', 'offset', 'length'}
+    rows = []
+    for r in ctx.recs:
+        fields = {k: v for k, v in r.items() if k not in skip}
+        rows.append([r['id'], '0x%x' % r['class'], r.get('category'), ctx.name(r['id']), r.get('changed_last_session'),
+                     ctx.name(r.get('parent')), json.dumps(fields, default=str, ensure_ascii=False)])
+    write_table(wb, 'All Records', ['ID', 'Class', 'Record type', 'Name', 'Changed last session', 'Parent',
+                                    'All decoded fields (JSON)'], rows, widths={'All decoded fields (JSON)': 120},
+                note='Every record and every decoded field, for values that have no column elsewhere.')
+
+
+def json_default(o):
+    """JSON for values json can't write: raw bytes as hex, anything else as text."""
+    return o.hex() if isinstance(o, (bytes, bytearray)) else str(o)
+
+
+def art_to_json_dict(data, filename=''):
+    """The Artist JSON export: header, counts and every decoded record (the same content as the All Records sheet,
+    as structured data). Used by export_tool.py --format json and by the web page's Download JSON."""
     h, recs = A.parse_art(data)
-    byid = {r['id']: r for r in recs}
-    target_row_map = compute_target_row_map(recs)
+    count = lambda cls: sum(1 for r in recs if r['class'] == cls)
+    return {
+        'format': 'Riedel Artist .Art',
+        'file': filename,
+        'header': h,
+        'counts': {
+            'records': len(recs),
+            'nodes': count(3),
+            'ports': sum(1 for r in recs if r['class'] in A.PORT_TYPE_NAMES),
+            'active_keys': sum(1 for r in recs if r['class'] == 9 and r.get('commands')),
+            'conferences': count(0x12),
+            'groups': count(0x11),
+            'ifbs': count(0x66),
+        },
+        'records': recs,
+    }
 
-    if output_path is None:
-        output_path = path.with_suffix('.xlsx')
-    else:
-        output_path = pathlib.Path(output_path)
 
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active)  # Remove default blank sheet
+def art_to_json_text(data, filename=''):
+    return json.dumps(art_to_json_dict(data, filename), indent=2, default=json_default)
 
-    # Build all sheets in order
-    build_summary_sheet(wb, h, recs, byid, path)
-    build_system_settings_sheet(wb, h, recs, byid)
-    build_nodes_sheet(wb, h, recs, byid)
-    build_cards_sheet(wb, h, recs, byid)
-    build_ports_sheet(wb, h, recs, byid)
-    build_panels_keys_sheet(wb, h, recs, byid, target_row_map=target_row_map)
-    build_conferences_sheet(wb, h, recs, byid)
-    build_groups_sheet(wb, h, recs, byid)
-    build_ifb_sheet(wb, h, recs, byid)
-    build_audiopatch_sheet(wb, h, recs, byid)
-    build_logic_gpio_sheet(wb, h, recs, byid)
-    build_trunks_sheet(wb, h, recs, byid)
-    build_users_sheet(wb, h, recs, byid)
-    build_scheduler_sheet(wb, h, recs, byid)
 
+def export_art_to_excel(art_file_path, output_path=None):
+    """Write the workbook for one .Art file; returns the output path."""
+    ctx = Ctx(art_file_path)
+    output_path = pathlib.Path(output_path) if output_path else ctx.path.with_suffix('.xlsx')
+    wb = Workbook()
+    sheet_summary(wb, ctx)
+    for fn in (sheet_resources, sheet_system, sheet_nodes, sheet_cards, sheet_ports, sheet_keys, sheet_virtual_functions, sheet_functions,
+               sheet_conferences, sheet_groups, sheet_ifbs, sheet_scroll_lists, sheet_audio_patches,
+               sheet_logic_gpio, sheet_users, sheet_other, sheet_key_details, sheet_markers, sheet_all_records):
+        fn(wb, ctx)
     wb.save(output_path)
     print(f"Successfully generated: {output_path}")
     return output_path
 
 
-USAGE = """usage: python art_to_excel.py [-o OUTPUT] [FILE.Art ...]
+USAGE = """usage: python art_to_excel.py [-o OUTPUT] FILE.Art [FILE.Art ...]
 
-  FILE.Art   one or more Artist saves (default: every .Art under ..)
+  FILE.Art   one or more Artist saves
   -o OUTPUT  output .xlsx for a single input, or an existing folder for several inputs
   -h, --help show this help and exit (nothing is written)"""
 
@@ -1268,21 +1014,17 @@ if __name__ == '__main__':
         i += 1
 
     if not args:
-        # Default: process all .Art files in parent and current directory
-        files = sorted(set(glob.glob('../*.Art') + glob.glob('../**/*.Art', recursive=True)))
-        if out_opt and not os.path.isdir(out_opt):
-            sys.exit('error: with several inputs, -o must be an existing folder')
-        for f in files:
-            try:
-                target = os.path.join(out_opt, pathlib.Path(f).stem + '.xlsx') if out_opt else None
-                export_art_to_excel(f, target)
-            except Exception as e:
-                print(f"Error converting {f}: {e}")
-    else:
-        if len(args) > 1 and out_opt and not os.path.isdir(out_opt):
-            sys.exit('error: with several inputs, -o must be an existing folder')
-        for f in args:
-            target = out_opt
-            if out_opt and os.path.isdir(out_opt):
-                target = os.path.join(out_opt, pathlib.Path(f).stem + '.xlsx')
+        sys.exit(USAGE)
+    files = args
+    if len(files) > 1 and out_opt and not os.path.isdir(out_opt):
+        sys.exit('error: with several inputs, -o must be an existing folder')
+    for f in files:
+        target = out_opt
+        if out_opt and os.path.isdir(out_opt):
+            target = os.path.join(out_opt, pathlib.Path(f).stem + '.xlsx')
+        try:
             export_art_to_excel(f, target)
+        except Exception as e:
+            print(f"Error converting {f}: {e}")
+            if args:
+                raise

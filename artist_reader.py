@@ -1,7 +1,6 @@
 """
 Sequential reader for Riedel Director `.Art` configuration files, transcribed from Director 8.9.D2's
-own load code (see docs/FORMAT_NOTES.md Â§5). Unlike the pattern-matching parser in riedel_formats.py,
-this reads the file exactly the way Director does: header, object directory, then every object's
+own load code (see docs/FORMAT_NOTES.md §5). It reads the file exactly the way Director does: header, object directory, then every object's
 Serialize() record in directory order.
 
 Function addresses in comments are Director 8.9.D2 virtual addresses.
@@ -1794,6 +1793,11 @@ EXPANSION_SLOTS = {0x00b: 32, 0x40b: 12, 0x40c: 32, 0x40e: 32, 0x40f: 32, 0x411:
 
 # Expansion panel names (confirmed 2026-09-26 on Node #4 Bay 2 of Artist CRAZY).
 EXPANSION_NAMES = {0x413: 'ECP-3016P', 0x415: 'DCP-3016PS', 0x418: 'RIF-1032', 0x419: 'ECP-1012EP'}
+# The other expansion classes, named from Director's own class names (docs/director_class_codes.txt):
+# CPhysECP1016E, CPhysDEM1006E, CPhysECP2016DP, CPhysDEM2008, CPhysESP2324 (RSP-2318 expansion),
+# CPhysESP1216HL (RSP-12xxHL expansion).
+EXPANSION_NAMES.update({0x00b: 'ECP-1016E', 0x40b: 'DEM-1006E', 0x40e: 'ECP-2016DP', 0x431: 'DEM-2008',
+                        0x437: 'ESP-2324', 0x507: 'ESP-1216HL'})
 
 
 def read_expansion(ar, o):
@@ -2182,7 +2186,11 @@ def read_user(ar, o):
         o['user_u16'] = 1 if o['user_manager'] else 0
         o['permissions'] = [name for bit, name in USER_RIGHT_BITS.items() if (o['rights'] >> bit) & 1]
         return
-    o['name'], o['full_name'], o['password'] = ar.string(), ar.string(), ar.string()
+    o['name'], o['full_name'] = ar.string(), ar.string()
+    # password: read as-is (FUN_00ccd0e0 passes 0 to Ar_ReadString) into a temporary, then bit-inverted;
+    # stored inverted like the system passwords (every sample decodes to a readable password)
+    # stored as UTF-8 of the character-wise inverted text (e.g. 'P' -> U+00AF -> C2 AF)
+    o['password'] = ''.join(chr(~ord(c) & 0xff) if ord(c) < 256 else c for c in ar.string())
     o['user_manager'] = bool(ar.u16())                   # +0xa0: User Account Manager
     o['user_u16'] = 1 if o['user_manager'] else 0        # backward-compat alias
     o['rights'] = ar.u16() if v < 0x3f else ar.u32()     # +0x98: rights bitmask
@@ -2855,10 +2863,12 @@ def parse_art(data):
 if __name__ == '__main__':
     import sys, collections, pathlib, re
     names = {}
-    for line in open(pathlib.Path(__file__).parent / 'docs' / 'director_class_codes.txt', encoding='utf-8'):
-        m = re.match(r'0x([0-9a-f]+)\s+(\S+)', line)
-        if m:
-            names[int(m.group(1), 16)] = m.group(2)
+    codes = pathlib.Path(__file__).parent / 'docs' / 'director_class_codes.txt'   # local research file, optional
+    if codes.exists():
+        for line in open(codes, encoding='utf-8'):
+            m = re.match(r'0x([0-9a-f]+)\s+(\S+)', line)
+            if m:
+                names[int(m.group(1), 16)] = m.group(2)
     show_dir = '--dir' in sys.argv
     for f in [a for a in sys.argv[1:] if not a.startswith('--')]:
         data = open(f, 'rb').read()

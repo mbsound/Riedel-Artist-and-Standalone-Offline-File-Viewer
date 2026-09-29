@@ -46,3 +46,16 @@ bolero_dense_gui/
 # IDE
 .idea/
 .vscode/
+
+# Research material derived from Riedel software (Director / Bolero firmware extracts, decompiled code,
+# Director exports). Regenerated locally by the tools in tools/ and docs/firmware_decomp/; never published.
+docs/director_class_codes.txt
+docs/director_dialogs.txt
+docs/director_ddx.txt
+docs/director_props.txt
+docs/director_exports/
+docs/firmware_decomp/*.c
+docs/firmware_decomp/func_index.txt
+tools/ghidra/serialize_list.txt
+# Exports of show data
+*.json

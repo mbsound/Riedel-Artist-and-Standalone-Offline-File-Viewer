@@ -3,7 +3,7 @@ Usage: python tools/census.py file1.Art [file2.Art ...]"""
 import sys, collections, pathlib, re
 CODE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(CODE))
-from riedel_formats import artist_object_types
+import artist_reader as A
 
 names = {}
 for line in open(CODE / 'docs' / 'director_class_codes.txt', encoding='utf-8-sig'):
@@ -15,7 +15,8 @@ files = sys.argv[1:]
 counts = {}
 for f in files:
     data = open(f, 'rb').read()
-    t = artist_object_types(data)
+    _, objs, _ = A.read_art(data)                   # object directory: (class, id, group)
+    t = {oid: cls for cls, oid, _ in objs}
     counts[pathlib.Path(f).stem[:18]] = collections.Counter(t.values())
 
 allc = sorted(set().union(*[c.keys() for c in counts.values()]))

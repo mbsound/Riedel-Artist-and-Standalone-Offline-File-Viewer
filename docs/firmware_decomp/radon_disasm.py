@@ -1,6 +1,7 @@
 import sys, struct
 from capstone import *
-LIB=r"Z:\Desktop\Verified Real Artist Files\Firmware\Firmware 2\extracted\nic_rootfs\usr\lib\libRadon.so"
+import pathlib
+LIB=str(pathlib.Path(__file__).resolve().parents[3]/"Firmware"/"Firmware 2"/"extracted"/"nic_rootfs"/"usr"/"lib"/"libRadon.so")
 d=open(LIB,"rb").read()
 u=lambda f,o: struct.unpack_from(f,d,o)
 e_shoff=u("<I",0x20)[0]; e_shentsize=u("<H",0x2e)[0]; e_shnum=u("<H",0x30)[0]; e_shstrndx=u("<H",0x32)[0]

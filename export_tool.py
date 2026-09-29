@@ -88,21 +88,8 @@ def export_artist_file(path, out_dir=None, fmt='excel', validate_only=False):
     # JSON export
     if fmt in ('json', 'all'):
         json_path = target_dir / f"{base_name}.json"
-        export_data = {
-            'header': h,
-            'counts': {
-                'records': len(recs),
-                'nodes': len(nodes),
-                'ports': len(ports),
-                'active_keys': len(keys),
-                'conferences': len(confs),
-                'groups': len(groups),
-                'ifbs': len(ifbs),
-            },
-            'records': recs
-        }
         with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2, default=str)
+            f.write(ArtExcel.art_to_json_text(data, path.name))    # same document as the web page's Download JSON
         created_files.append(str(json_path))
 
     return True, metrics, created_files
@@ -158,7 +145,7 @@ def export_bolero_file(path, out_dir=None, fmt='excel', validate_only=False):
     if fmt in ('json', 'all'):
         json_path = target_dir / f"{base_name}_bolero.json"
         with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(res, f, indent=2, default=str)
+            f.write(B.to_json_text(res, path.name))                # bytes as hex, same as the web page
         created_files.append(str(json_path))
 
     return True, metrics, created_files
@@ -213,7 +200,9 @@ def correlate_artist_and_bolero(files, out_dir=None, fmt='excel'):
                 cfg = b.get('config', {})
                 art = cfg.get('artist', {})
                 bps.append({
-                    'id': cfg.get('id'),
+                    # the beltpack's User ID (BPConfig bpNumber, shown as 'User ID' in the Bolero web GUI);
+                    # cfg['id'] is the profile id and TermId (b['h0']) is internal
+                    'id': cfg.get('bp_number'),
                     'name': cfg.get('name', ''),
                     'artist_name': art.get('name', ''),
                 })
