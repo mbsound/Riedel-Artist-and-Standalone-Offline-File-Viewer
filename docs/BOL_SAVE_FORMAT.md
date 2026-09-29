@@ -72,6 +72,8 @@ u32 section_length
 ```
 
 Standard fingerprint across 3.3.x–3.4.x: `2/6/10.2.17.19.1.1.6.6.60000`
+Firmware 3.5 writes network v11; 3.6.0 writes `10→12`, profiles `17→18`, beltpacks `19→20`, audio devices `6→7`
+(see §17). The reader refuses a section newer than it knows rather than guessing.
 Approved Section Order:
 | Index | Role Name | Version | Origin | Firmware Class |
 |---|---|---|---|---|
@@ -91,34 +93,41 @@ Approved Section Order:
 
 Routine: `radon::NetSettings::unpackDataFromSaved` → `radon::NetSettingsData::unpack`
 
+Names come from the `NetSettings` getter that reads each stored member (`NetSettingsData` sits at `NetSettings+0x34`),
+in both 3.4.1 and 3.6.0. *Corrected 2026-09-29: items 6, 8, 20 and 23 were previously mislabelled
+(multicastTtl / netLabel / ptpDomain / ptpMode); the sample saves now read PTP domain 0, PTP mode 1-3, TTL 16.*
+
 ### Byte Layout:
 1. `getString()`: `netName` (show / network name)
 2. `getUInt8()`: `systemMode` (`SystemMode`: 0 Standalone/AES67, 1 Standalone/Link, 2 Artist)
 3. `getInt16()`: `adminPin`
 4. `getInt16()`: `otaPin`
+   - *v11+ (3.5, 3.6):* `getString()`: `adminPasswordHash` — the 8–64 character web GUI admin password, stored only
+     as a hash (JSON `isPasswordSet`). Exported as set / not set; the hash is never exported.
 5. `read(4)`: `audioMulticastGroup` (`SimpleIp` address bytes)
-6. `getUInt8()`: `multicastTtl`
+6. `getUInt8()`: `ptpDomain` (`getPtpDomain`)
 7. `getUInt8()`: `timeSource` (`TimeSource`: 0 Internal, 1 NTP, 2 PTP)
-8. `getString()`: `netLabel` (network label)
-9. `getInt32()`: `timeOffset`
+8. `getString()`: `ntpServer` (`getNtpServer`)
+9. `getInt32()`: `timeOffset` (signed)
 10. `getUInt8()`: `timeFormat` (`TimeFormat`: 0 24h, 1 12h)
 11. `getUInt8()`: `dateFormat` (`DateFormat`: 0 YMD, 1 DMY, 2 MDY)
 12. `getUInt8()`: `radioPower` (`RadioPower`)
 13. `getUInt8()`: `radioPower2G4` (`RadioPower`)
 14. `getUInt8()`: `radioRetransmissionLimit` (`RadioRetransmissionLimit`)
 15. `getUInt8()`: `frequencyHoppingMode`
-16. `getUInt8()`: `radioFlags` (bit 0: radio enabled, bit 1: radio priority, bit 2: bp mon threshold, bit 3: 2G4 high power, bit 4: dect scanner, bit 5: web server encryption)
+   - *v12+ (3.6):* `getUInt8()`: `japanDectMode` (`JapanDectMode::getText`: 0 unset, 1 "Japan Mode 1", 2 "Japan Mode 2")
+16. `getUInt8()`: `radioFlags` (bit 0: radio enabled, bit 1: PTP 2-ULLI, bit 2: BP monitoring threshold, bit 3: radio priority, bit 4: high 2.4 GHz power, bit 5: web server encryption; from the NetSettings getters. *Corrected 2026-09-29.*)
 17. `RegistrationMode::unpack`:
     - `u8 flags` (JSON `registrationMode`: `registrationEnabled` = flags != 0, bit 0 `otaEnabled`, bit 1 `nfcEnabled`, bit 2 `chargerEnabled`). *Corrected 2026-09-29: this is not an Open/Pin/Closed enum.*
     - `i8`
     - `i16`
 18. `getUInt8()`: `broadcastMode`
 19. `read(32)`: `broadcastEncryptionKey` (AES-256 key bytes)
-20. `getUInt8()`: `ptpDomain`
+20. `getUInt8()`: `ptpMode` (`getPtpMode`; web GUI ptpHybrid = bit 1, ptpSlaveOnly = bit 2)
 21. `getUInt32()`: `debugFlags`
 22. `DSCPSettings::unpack`:
     - 3 × `getUInt8()`: `dscpPtp`, `dscpRtp` (audio), `dscpControl` (web GUI defaults 46 / 34 / 36). *Corrected 2026-09-29.*
-23. `getUInt8()`: `ptpMode`
+23. `getUInt8()`: `multicastTtl` (`getMulticastTtl`)
 24. `ArtistNetSettings::unpack`:
     - `u32 networkId`, `u32 clusterId`, `read(4) mcAnnounceIp`, `u16 mcAnnouncePort` (byte-swapped). *Corrected 2026-09-29 (was ip1/ip2/netmask/port).*
 25. `getInt16()`: `bpMonitoringThreshold`
@@ -202,8 +211,9 @@ Vector sizes not present in stream are fixed by C++ constructor defaults:
 ### Full Field Sequence:
 1. `getInt16()`: `id`
 2. `getString()`: `name` (User / beltpack label)
-3. `getUInt16()`: `u16_20`
-4. `getUInt8()`: `u8_24`
+3. `getUInt16()`: `bpNumber` (the User ID the web GUI shows)
+   - *profiles v18+ / beltpacks v20+ (3.6):* `getString()`: `bpDescription` (JSON `bpDescription`)
+4. `getUInt8()`: `u8_24` (3.6: member `+0x3c`; not in the JSON, meaning unknown)
 5. `AudioPortsList::unpack`:
    - `getUInt8()`: `n_ports`
    - `n_ports` × `AudioPortEntry`:
@@ -525,3 +535,25 @@ control bytes.
   sides it has. When a side of a pair is switched off on the device (`IODeviceAudioChannelConfig` plug type 0,
   index -1), the channel's plug for that side is stored empty as well; the channel keeps its name and index.
   `bol_faithful.channel_sides()` reports such a side as disabled (seen in the samples on two XLR outputs of one NSA-002A).
+
+---
+
+## 17. Firmware 3.5 / 3.6.0 changes (2026-09-29)
+
+From `Bolero_Firmware_v3.6.0` libRadon.so, compared with 3.4.x (`Firmware 2`, which matches the sample saves):
+
+| Section | 3.4.x | 3.5 | 3.6.0 | Stream change |
+|---|---|---|---|---|
+| network | 10 | 11 | 12 | v11 adds `adminPasswordHash` string after `otaPin`; v12 adds `japanDectMode` u8 before `radioFlags` (`NetSettingsData::unpackFromOldVersion3_4` / `3_5` / `unpack`) |
+| profiles | 17 | 17 | 18 | each `BPConfig` gains `bpDescription` after `bpNumber` |
+| beltpacks | 19 | 19 | 20 | same `BPConfig` change; `RegisteredBPEntry` otherwise identical |
+| audio devices | 6 | 6 | 7 | none: v6 and v7 both read with `SingleIODeviceConfig::unpack`; v7 only calls `IODeviceConfigData::clearAudioChannelsWithoutDirection` after loading |
+| all others | — | — | unchanged | |
+
+- The "8-digit admin code" of 3.6 is the web GUI admin **password** (`ADMIN_PASSWORD_LENGTH` 8–64). The beltpack
+  Admin PIN is still the 4-digit int16. 3.6's JSON no longer lists `adminPin` for the web GUI but the stream still
+  carries it.
+- `SingleNodeAudioPorts::unpackAllData` grew, but it is only used for live full/diff messages, not saves.
+- No real 3.5 or 3.6 save was available. `tools/make_synthetic_36.py` rewrites the 3.4 samples into the 3.6 layout
+  (inserting the fields where 3.6.0 reads them) and checks that they parse exactly, that the new fields decode, that
+  everything else matches the 3.4 parse, and that the password hash is not exported.

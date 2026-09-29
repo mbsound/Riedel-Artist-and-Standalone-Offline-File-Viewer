@@ -13,7 +13,9 @@ import pathlib
 import re
 import sys
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'firmware_decomp' / 'libRadon_3.4.1_serializers.c'
+import os
+SRC = pathlib.Path(os.environ.get('RADON_SRC') or pathlib.Path(__file__).resolve().parent.parent / 'docs' / 'firmware_decomp'
+                   / ('libRadon_%s_serializers.c' % os.environ.get('RADON_FW', '3.4.1')))
 FUNC = re.compile(r'^// ==== (radon::[\w:<>,\s]+?)  @ ([0-9a-f]+) ====$', re.M)
 
 

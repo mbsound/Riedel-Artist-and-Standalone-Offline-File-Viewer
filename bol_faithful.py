@@ -59,6 +59,7 @@ class InputStream:
     def u16(self): self._need(2); v=struct.unpack_from(">H",self.d,self.p)[0]; self.p+=2; return v
     def i16(self): v=self.u16(); return v-0x10000 if v>=0x8000 else v
     def u32(self): self._need(4); v=struct.unpack_from(">I",self.d,self.p)[0]; self.p+=4; return v
+    def i32(self): v=self.u32(); return v-0x100000000 if v>=0x80000000 else v
     def read(self, n): self._need(n); v=self.d[self.p:self.p+n]; self.p+=n; return v
     def string(self):
         n=self.u8(); return self.read(n).decode("utf-8","replace")
@@ -200,7 +201,9 @@ def up_bpconfig(s):
     c["id"]=s.i16()                                   # +0x04 profileId
     c["name"]=s.string()                              # bpName
     c["bp_number"]=s.u16()                            # +0x20 bpNumber
-    c["u8_24"]=s.u8()                                 # +0x24: not in the JSON; meaning unknown
+    # bpDescription: new in 3.6 (profiles section v18, beltpacks section v20); the section reader sets the flag
+    c["bp_description"]=s.string() if getattr(s, "bp_description", False) else ""
+    c["u8_24"]=s.u8()                                 # +0x24 (3.6: +0x3c): not in the JSON; meaning unknown
     c["audio_ports"]=up_audio_ports_list(s)           # +0x28 audioPorts
     c["keys"]=[up_bpkey(s) for _ in range(N_KEYS)]    # +0x44 keys
     c["always_on"]=[up_single_function(s) for _ in range(s.u8())]        # +0x50 alwaysOnFunctions
@@ -249,17 +252,27 @@ def up_profile(s):
             "append_id_to_default_name":s.boolean(),"update_name":s.boolean(),"timestamp":s.u32()}
 
 OVERRIDE_MODES = {0: "Off", 1: "Active", 2: "Active + written to beltpack config"}
+JAPAN_DECT_MODES = {0: "Not set", 1: "Japan Mode 1", 2: "Japan Mode 2"}   # radon::JapanDectMode::getText (3.6)
 
 # ── section 0: network (radon::NetSettings::unpackDataFromSaved / NetSettingsData::unpack) ──
 def up_net_settings_section(s):
+    """Field names from the NetSettings getter that reads each stored member (NetSettingsData sits at +0x34).
+    Section v10 = 3.3/3.4 (NetSettingsData::unpackFromOldVersion3_4), v11 = 3.5 (adds the web admin password
+    hash), v12 = 3.6 (adds japanDectMode)."""
+    v = getattr(s, "version", 10)
     net_name = s.string()
     system_mode = s.u8(); admin_pin = s.i16(); ota_pin = s.i16()
-    audio_multicast_group = list(s.read(4)); multicast_ttl = s.u8(); time_source = s.u8()
-    net_label = s.string()
-    time_offset = s.u32()
+    # 3.5+: the web GUI admin password (8-64 characters) stored only as a hash; exported as whether one is set
+    # (JSON isPasswordSet), never the hash itself
+    admin_password_hash = s.string() if v >= 11 else None
+    audio_multicast_group = list(s.read(4)); ptp_domain = s.u8(); time_source = s.u8()
+    ntp_server = s.string()
+    time_offset = s.i32()
     time_format = s.u8(); date_format = s.u8()
     radio_power = s.u8(); radio_power_2g4 = s.u8(); radio_retransmission_limit = s.u8()
-    frequency_hopping_mode = s.u8(); radio_flags = s.u8()
+    frequency_hopping_mode = s.u8()
+    japan_dect_mode = s.u8() if v >= 12 else None     # 3.6: JapanDectMode 0 unset, 1/2 Japan Mode 1/2
+    radio_flags = s.u8()
     # RegistrationMode::unpack: +4 flags, +8 timeout, +0xc profileId (JSON registrationMode: registrationEnabled =
     # flags != 0, otaEnabled bit 0, nfcEnabled bit 1, chargerEnabled bit 2, timeout, profileId)
     rm_flags = s.u8(); rm_timeout = s.i8(); rm_profile = s.i16()
@@ -267,9 +280,9 @@ def up_net_settings_section(s):
           "nfc_enabled": bool(rm_flags & 2), "charger_enabled": bool(rm_flags & 4),
           "timeout": rm_timeout, "profile_id": rm_profile}
     broadcast_mode = s.u8(); enc = s.read(32)
-    ptp_domain = s.u8(); debug_flags = s.u32()
+    ptp_mode = s.u8(); debug_flags = s.u32()
     dscp = [s.u8() for _ in range(3)]
-    ptp_mode = s.u8()
+    multicast_ttl = s.u8()
     # ArtistNetSettings (JSON artistNetSettings): networkId, clusterId, mcAnnounceIp, mcAnnouncePort
     ans = {"network_id": s.u32(), "cluster_id": s.u32(), "mc_announce_ip": ".".join(str(b) for b in s.read(4)),
            "mc_announce_port": s.u16()}
@@ -295,8 +308,11 @@ def up_net_settings_section(s):
     sig = {e: signalization_text(notif_sig >> (4 * i) & 0xf) for i, e in enumerate(SIGNALIZATION_EVENTS)}
 
     return {
-        "show_name": net_name, "label": net_label, "system_mode": system_mode,
+        "show_name": net_name, "ntp_server": ntp_server, "system_mode": system_mode,
         "admin_pin": admin_pin, "ota_pin": ota_pin,
+        "admin_password_set": bool(admin_password_hash) if admin_password_hash is not None else None,
+        "japan_dect_mode": japan_dect_mode,
+        "japan_dect_mode_name": JAPAN_DECT_MODES.get(japan_dect_mode, japan_dect_mode) if japan_dect_mode is not None else None,
         "audio_multicast_group": audio_multicast_group, "multicast_ttl": multicast_ttl,
         "time_source": time_source, "time_offset": time_offset,
         "time_format": time_format, "date_format": date_format,
@@ -340,6 +356,7 @@ def up_partylines_section(s):
 
 # ── section 2: profiles (radon::Profiles::unpackDataFromSaved / Profiles::unpackDiffData) ──
 def up_profiles_section(s):
+    s.bp_description = getattr(s, "version", 0) >= 18       # 3.6: BPConfig carries bpDescription
     remove_count=s.i16()
     removals=[{"id":s.i16(),"timestamp":s.u32()} for _ in range(remove_count)]
     full_count=s.u8()
@@ -361,6 +378,7 @@ def up_registered_bp_entry(s):
             "term_id":a,"bp_type":b,"ipei":"0x%04X %06X" % (c, d),
             "timestamp":tail[0],"last_connect_time":tail[1],"config_timestamp":tail[2],"master_timestamp":tail[3]}
 def up_beltpacks_section(s):
+    s.bp_description = getattr(s, "version", 0) >= 20       # 3.6: BPConfig carries bpDescription
     count=s.u16()
     entries=[up_registered_bp_entry(s) for _ in range(count)]
     count2=s.u16()
@@ -775,6 +793,19 @@ SECTION_READERS = {
     "gpio": up_gpio_section,
 }
 
+# newest section save-version each reader handles (radon::X::getSaveVersion). 3.4.x wrote network 10,
+# profiles 17, beltpacks 19, audio devices 6; 3.5 network 11; 3.6.0 network 12, profiles 18, beltpacks 20,
+# audio devices 7 (same bytes as 6: the firmware only drops direction-less channels after loading).
+MAX_SECTION_VERSION = {"network": 12, "partylines": 2, "profiles": 18, "beltpacks": 20, "antennas": 1,
+                       "unknown": 1, "audio_devices": 7, "audio_channels": 6, "gpio": 60000}
+NETWORK_VERSION_FIRMWARE = {10: "3.3 / 3.4", 11: "3.5", 12: "3.6"}
+
+def saved_by_firmware(parsed):
+    """The Bolero firmware generation that wrote the save, from the network section's save version."""
+    v = next((x["version"] for x in parsed.get("_sections", []) if x["role"] == "network"), None)
+    return NETWORK_VERSION_FIRMWARE.get(v, "older than 3.3" if v is not None and v < 10 else
+                                        "newer than 3.6" if v is not None else "")
+
 def parse_file(path):
     """Parse a .bol; returns {role: parsed} for all 9 sections, each gated on exact byte consumption."""
     data, secs = read_container(open(path, "rb").read())
@@ -782,11 +813,15 @@ def parse_file(path):
     for sec in secs:
         r = SECTION_READERS.get(sec["role"])
         if not r: continue
-        s = InputStream(data, sec["start"], sec["end"]); s.p = sec["start"]
+        newest = MAX_SECTION_VERSION.get(sec["role"])
+        if newest is not None and sec["version"] > newest:
+            raise ValueError(f"{sec['role']}: section version {sec['version']} is newer than this reader knows "
+                             f"({newest}) - the save comes from Bolero firmware newer than 3.6")
+        s = InputStream(data, sec["start"], sec["end"]); s.p = sec["start"]; s.version = sec["version"]
         parsed = r(s)
         if s.p != sec["end"]:
-            raise ValueError(f"{sec['role']}: consumed to {s.p}, expected {sec['end']} "
-                             f"(residual {sec['end']-s.p})")
+            raise ValueError(f"{sec['role']} (section version {sec['version']}): consumed to {s.p}, "
+                             f"expected {sec['end']} (residual {sec['end']-s.p})")
         out[sec["role"]] = parsed
     return out
 
@@ -813,11 +848,21 @@ def pin_text(v, admin=None):
 # Service view (6-digit Service PIN); it is not part of the saved network settings.
 RADIO_POWER_NAMES = {0: "Normal", 1: "Low", 2: "Ultra Low"}
 RETRANSMIT_NAMES = {1: "Low", 2: "Medium", 3: "High", 4: "Very High"}
-RADIO_FLAG_NAMES = ["Radio enabled", "Radio priority", "BP monitoring threshold", "High 2.4 GHz radio power",
-                    "DECT scanner", "Web server encryption"]
+# radioFlags bits, from NetSettings::isRadioEnabled (bit 0), getPtp2Ulli (1), isBpMonitoringThresholdEnabled (2),
+# isRadioPriorityEnabled (3), isHighPower2G4Enabled (4), isWebServerEncryptionEnabled (5) - same in 3.4.1 and 3.6.0
+RADIO_FLAG_NAMES = ["Radio enabled", "PTP 2-ULLI", "BP monitoring threshold", "Radio priority",
+                    "High 2.4 GHz radio power", "Web server encryption"]
 PIN_NOTE = ("The Admin PIN logs in to the beltpack admin menu and to the web GUI as Admin (4 digits). "
+            "From firmware 3.5 the web GUI Admin login uses a separate 8-64 character password; saves hold only "
+            "a one-way hash of it, so it cannot be shown. "
             "The 6-digit Service PIN, needed to change the DECT region, is set per device, is not in show files, "
             "and is issued by Riedel support.")
+
+def admin_password_text(is_set):
+    """The 3.5+ web admin password (NetSettings::getAdminPasswordHash; JSON isPasswordSet)."""
+    if is_set is None:
+        return "Not in saves before 3.5 (web login uses the Admin PIN)"
+    return "Set (stored as a hash - not recoverable from the file)" if is_set else "Not set"
 
 def radio_flags_text(flags):
     return ", ".join(n for i, n in enumerate(RADIO_FLAG_NAMES) if (flags or 0) >> i & 1) or "None"
@@ -1014,15 +1059,18 @@ def export_to_excel(path, out_xlsx=None):
     rm = net.get("registration_mode", {})
     rows = [
         ("Show Name", net.get("show_name", "")),
-        ("Network Label", net.get("label", "")),
+        ("Saved by firmware", saved_by_firmware(parsed)),
         ("System Mode", net.get("system_mode", "")),
         ("— PINs —", ""),
         ("Admin PIN (beltpack admin menu + web GUI Admin login)", pin_text(net.get("admin_pin"))),
         ("OTA Registration PIN", pin_text(net.get("ota_pin"), net.get("admin_pin"))),
+        ("Web admin password (3.5+)", admin_password_text(net.get("admin_password_set"))),
         ("Service PIN (6 digits, DECT region changes)", "Not in show files - issued by Riedel support"),
         ("Note", PIN_NOTE),
         ("— DECT / Radio —", ""),
         ("DECT region", "Set per device in the Service view - not saved in the show file"),
+        ("Japan DECT mode (3.6+)", net.get("japan_dect_mode_name") if net.get("japan_dect_mode") is not None
+                                   else "Not in saves before 3.6"),
         ("Radio Power (DECT)", named(RADIO_POWER_NAMES, net.get("radio_power", ""))),
         ("Radio Power (2.4 GHz)", named(RADIO_POWER_NAMES, net.get("radio_power_2g4", ""))),
         ("Retransmit Level", named(RETRANSMIT_NAMES, net.get("radio_retransmission_limit", ""))),
@@ -1042,6 +1090,8 @@ def export_to_excel(path, out_xlsx=None):
         ("PTP Slave Only", "Yes" if net.get("ptp_slave_only") else "No"),
         ("PTP Domain", net.get("ptp_domain", "")),
         ("Time Source", {0: "Internal", 1: "NTP", 2: "PTP"}.get(net.get("time_source"), net.get("time_source", ""))),
+        ("NTP Server", net.get("ntp_server", "") or "—"),
+        ("Time Offset", net.get("time_offset", "")),
         ("— Registration —", ""),
         ("Registration", "Enabled" if rm.get("registration_enabled") else "Disabled"),
         ("  OTA registration", "On" if rm.get("ota_enabled") else "Off"),
@@ -1138,22 +1188,27 @@ def export_to_excel(path, out_xlsx=None):
     users_of = {}
     for e in parsed.get("beltpacks", {}).get("beltpacks", []):
         users_of[e["config"].get("id")] = users_of.get(e["config"].get("id"), 0) + 1
-    ws = sheet("Profiles", ["Profile ID", "Profile", "Beltpacks using it"] + key_headers)
+    # bpDescription exists from firmware 3.6; the column is only added when a save carries one
+    has_desc = any(x["config"].get("bp_description") for sec in ("profiles", "beltpacks")
+                   for x in parsed.get(sec, {}).get(sec, []))
+    desc = (lambda cfg: [cfg.get("bp_description", "")]) if has_desc else (lambda cfg: [])
+    ws = sheet("Profiles", ["Profile ID", "Profile"] + (["Description"] if has_desc else []) + ["Beltpacks using it"]
+               + key_headers)
     for r_idx, pr in enumerate(parsed.get("profiles", {}).get("profiles", []), 5):
         pid = pr["config"]["id"]
-        append_row(ws, r_idx, [pid, pr["name"], users_of.get(pid, 0)] + key_cells(pr["config"]))
+        append_row(ws, r_idx, [pid, pr["name"]] + desc(pr["config"]) + [users_of.get(pid, 0)] + key_cells(pr["config"]))
 
     # 5. Beltpacks
-    ws = sheet("Beltpacks", ["User ID", "Beltpack", "Profile"] + key_headers)
+    ws = sheet("Beltpacks", ["User ID", "Beltpack"] + (["Description"] if has_desc else []) + ["Profile"] + key_headers)
     for r_idx, e in enumerate(sorted(parsed.get("beltpacks", {}).get("beltpacks", []),
                                      key=lambda e: (e["config"].get("bp_number") or 0, e["h0"])), 5):
         cfg = e["config"]
-        append_row(ws, r_idx, [cfg.get("bp_number"), cfg["name"], prof_by_id_all.get(cfg.get("id"), "")]
+        append_row(ws, r_idx, [cfg.get("bp_number"), cfg["name"]] + desc(cfg) + [prof_by_id_all.get(cfg.get("id"), "")]
                    + key_cells(cfg))
 
     # 5b. Beltpack info: identity and the decoded per-beltpack settings (one row per beltpack)
     band = {3300: "1.9 GHz", 3303: "1.9 GHz", 3304: "2.4 GHz", 3306: "2.4 GHz"}
-    ws = sheet("Beltpack Info", ["User ID", "Name", "IPEI", "Type code", "Band", "TermId (internal)", "Profile ID",
+    ws = sheet("Beltpack Info", ["User ID", "Name", "Description (3.6+)", "IPEI", "Type code", "Band", "TermId (internal)", "Profile ID",
                                  "Last connected (UTC)", "Config changed (UTC)", "Headset vol", "Speaker vol",
                                  "Sidetone", "Headset mic gain", "Internal mic gain", "Mic type", "Language",
                                  "VOX", "Silent mode", "Speaker enabled", "Echo cancellation", "Noise filter",
@@ -1162,7 +1217,7 @@ def export_to_excel(path, out_xlsx=None):
     for r_idx, e in enumerate(parsed.get("beltpacks", {}).get("beltpacks", []), 5):
         c = e["config"]; v = c.get("volumes", {}); fl = c.get("flags", {}); sg = c.get("signalization", {})
         pr = c.get("priority", {})
-        append_row(ws, r_idx, [c.get("bp_number", ""), c.get("name", ""), e.get("ipei", ""), e["h1"], band.get(e["h1"], ""),
+        append_row(ws, r_idx, [c.get("bp_number", ""), c.get("name", ""), c.get("bp_description", ""), e.get("ipei", ""), e["h1"], band.get(e["h1"], ""),
                                e["h0"], c.get("id", ""), ts_text(e.get("last_connect_time")),
                                ts_text(e.get("config_timestamp")), v.get("headset_volume"), v.get("speaker_volume"),
                                v.get("sidetone_volume"), v.get("headset_mic_input_gain"),

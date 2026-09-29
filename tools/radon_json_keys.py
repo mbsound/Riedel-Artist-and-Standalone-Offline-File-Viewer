@@ -14,8 +14,17 @@ import struct
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
-SRC = HERE / 'docs' / 'firmware_decomp' / 'libRadon_3.4.1_serializers.c'
-LIB = HERE.parent / 'Firmware' / 'Firmware 2' / 'extracted' / 'nic_rootfs' / 'usr' / 'lib' / 'libRadon.so'
+# Which firmware: RADON_FW=3.4.1 (default) or 3.6.0, or explicit RADON_SRC (Ghidra output of
+# docs/firmware_decomp/DecompileTargets.java) and RADON_LIB (the libRadon.so it was made from).
+import os
+FIRMWARE = {
+    '3.4.1': ('libRadon_3.4.1_serializers.c', ('Firmware 2',)),
+    '3.6.0': ('libRadon_3.6.0_serializers.c', ('Bolero_Firmware_v3.6.0_incl.RN',)),
+}
+_FW = os.environ.get('RADON_FW', '3.4.1')
+SRC = pathlib.Path(os.environ.get('RADON_SRC') or HERE / 'docs' / 'firmware_decomp' / FIRMWARE[_FW][0])
+LIB = pathlib.Path(os.environ.get('RADON_LIB') or HERE.parent.joinpath('Firmware', *FIRMWARE[_FW][1], 'extracted',
+                                                                      'nic_rootfs', 'usr', 'lib', 'libRadon.so'))
 BASE = 0x10000        # Ghidra loaded the shared object at 0x10000: decompiled address = ELF vaddr + BASE
 
 

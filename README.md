@@ -58,6 +58,12 @@ Rows highlighted in yellow are objects created or changed in the editing session
 
 Summary, Network, Partylines, Audio Channels, Profiles, Beltpacks, Antennas, Audio Devices, GPIO Triggers.
 
+Reads saves from Bolero firmware 3.3 / 3.4, 3.5 and 3.6 (the layout is chosen from each section's save version; see
+`docs/BOL_SAVE_FORMAT.md` §17). 3.6 adds beltpack / profile descriptions and the Japan DECT mode. 3.5 and later
+store the web GUI admin password only as a hash, so the workbook shows whether one is set, not the password. The 3.5 /
+3.6 readers were checked against the firmware and against 3.4 saves rewritten into the 3.6 layout
+(`tools/make_synthetic_36.py`), not against a real 3.6 save.
+
 ## Documentation
 
 - `docs/HANDOFF.md`: decoding status, methods and the Director functions each field comes from.

@@ -229,7 +229,8 @@ def _bolero_view(parsed):
             if k['target']['type'] == 2:
                 pl_users.setdefault(k['target']['id'], set()).add(e['h0'])
         # 'User ID' is what the Bolero web GUI shows (BPConfig bpNumber); TermId (h0) is internal and 0-based
-        beltpacks.append({{'id': cfg.get('bp_number'), 'name': cfg.get('name', ''), 'band': BOL_BP_BAND.get(e['h1'], ''),
+        beltpacks.append({{'id': cfg.get('bp_number'), 'name': cfg.get('name', ''), 'description': cfg.get('bp_description', ''),
+                           'band': BOL_BP_BAND.get(e['h1'], ''),
                            'bp_type': e['h1'], 'ipei': e.get('ipei', ''),
                            'last_connected': bol_faithful.ts_text(e.get('last_connect_time')),
                            'keys': keys_text(cfg),
@@ -245,7 +246,8 @@ def _bolero_view(parsed):
     for p in profs:
         pid = p['config']['id']
         users = [e['config'].get('name', '') for e in bps if e['config'].get('id') == pid]
-        profiles.append({{'id': pid, 'name': p['name'] or p['config']['name'], 'bp_count': len(users),
+        profiles.append({{'id': pid, 'name': p['name'] or p['config']['name'],
+                          'description': p['config'].get('bp_description', ''), 'bp_count': len(users),
                           'beltpacks': ', '.join(users), 'keys': keys_text(p['config']),
                           'priority_antennas': ', '.join(prof_prio.get(pid, []))}})
 
@@ -316,7 +318,7 @@ def _bolero_view(parsed):
     overview = [
         ['System', [
             ['Show name', net.get('show_name', '')],
-            ['Network label', net.get('label', '')],
+            ['Saved by firmware', bol_faithful.saved_by_firmware(parsed)],
             ['System mode', BOL_SYSTEM_MODE.get(net.get('system_mode'), net.get('system_mode'))],
             ['Radio band (antennas with priority lists)',
              _band_summary([BOL_ANT_BAND.get(a['node_type']) for a in ants]) or 'None in this file (see Antenna Priority tab)'],
@@ -326,6 +328,7 @@ def _bolero_view(parsed):
         ['PINs & access', [
             ['Admin PIN (beltpack admin menu + web GUI Admin login)', bol_faithful.pin_text(net.get('admin_pin'))],
             ['OTA registration PIN', bol_faithful.pin_text(net.get('ota_pin'), net.get('admin_pin'))],
+            ['Web admin password (3.5+)', bol_faithful.admin_password_text(net.get('admin_password_set'))],
             ['Service PIN (6 digits, DECT region changes)', 'Not in show files - issued by Riedel support'],
             ['Note', bol_faithful.PIN_NOTE],
         ]],
@@ -336,9 +339,11 @@ def _bolero_view(parsed):
         ]],
         ['Radio & region', [
             ['DECT region', 'Set per device in the Service view - not saved in the show file'],
+            ['Japan DECT mode (3.6+)', net.get('japan_dect_mode_name') if net.get('japan_dect_mode') is not None
+                                       else 'Not in saves before 3.6'],
             ['Radio power (DECT)', bol_faithful.RADIO_POWER_NAMES.get(net.get('radio_power'), net.get('radio_power', ''))],
             ['Radio power (2.4 GHz)', bol_faithful.RADIO_POWER_NAMES.get(net.get('radio_power_2g4'), net.get('radio_power_2g4', ''))],
-            ['High 2.4 GHz radio power', 'On' if flags >> 3 & 1 else 'Off'],
+            ['High 2.4 GHz radio power', 'On' if flags >> 4 & 1 else 'Off'],   # radioFlags bit 4 (isHighPower2G4Enabled)
             ['Retransmit level', bol_faithful.RETRANSMIT_NAMES.get(net.get('radio_retransmission_limit'), net.get('radio_retransmission_limit', ''))],
             ['Frequency hopping mode (0-15)', net.get('frequency_hopping_mode', '')],
             ['Radio options on', bol_faithful.radio_flags_text(flags)],
@@ -348,6 +353,9 @@ def _bolero_view(parsed):
             ['Multicast TTL', net.get('multicast_ttl', '')],
             ['Time source', BOL_TIME_SOURCE.get(net.get('time_source'), net.get('time_source'))],
             ['PTP domain', net.get('ptp_domain', '')],
+            ['PTP hybrid / slave only', '%s / %s' % ('Yes' if net.get('ptp_hybrid') else 'No',
+                                                     'Yes' if net.get('ptp_slave_only') else 'No')],
+            ['NTP server', net.get('ntp_server', '') or '-'],
             ['DSCP (PTP / audio RTP / control)', ' / '.join(str(x) for x in net.get('dscp', []))],
         ]],
     ]
@@ -709,6 +717,7 @@ def generate_excel_blob(file_bytes, filename):
 
                 const table = (label, rows, cols, note) => {{
                     const t = {{ name: `${{label}} (${{rows.length}})` }};
+                    cols = cols.filter(c => !c.ifAny || rows.some(r => r[c.key]));
                     const intro = note ? `<p class="px-6 pt-4 pb-2 text-sm text-slate-400">${{note}}</p>` : '';
                     t.render = () => intro + (rows.length ? sortableTable(t, rows, cols) : `<p class="p-6 text-slate-400">No ${{label.toLowerCase()}} in this file.</p>`);
                     tabs.push(t);
@@ -716,6 +725,7 @@ def generate_excel_blob(file_bytes, filename):
                 table('Beltpacks', v.beltpacks, [
                     {{ key: 'id', label: 'User ID', cls: 'font-mono text-slate-400' }},
                     {{ key: 'name', label: 'Name', cls: 'font-medium text-white' }},
+                    {{ key: 'description', label: 'Description', cls: 'text-slate-300', ifAny: true }},
                     {{ key: 'band', label: 'Band', cls: 'text-blue-300' }},
                     {{ key: 'ipei', label: 'IPEI', cls: 'font-mono text-slate-300' }},
                     {{ key: 'profile', label: 'Profile', cls: 'text-slate-300' }},
@@ -725,6 +735,7 @@ def generate_excel_blob(file_bytes, filename):
                 table('Profiles', v.profiles, [
                     {{ key: 'id', label: 'ID', cls: 'font-mono text-slate-400' }},
                     {{ key: 'name', label: 'Name', cls: 'font-medium text-white' }},
+                    {{ key: 'description', label: 'Description', cls: 'text-slate-300', ifAny: true }},
                     {{ key: 'bp_count', label: 'Beltpacks', cls: 'font-bold text-emerald-400' }},
                     {{ key: 'beltpacks', label: 'Used by', cls: 'text-slate-300', wrap: true }},
                     {{ key: 'keys', label: 'Keys [mode]', cls: 'text-slate-300', wrap: true }},
