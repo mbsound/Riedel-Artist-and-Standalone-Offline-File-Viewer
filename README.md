@@ -9,8 +9,9 @@ The Artist side is decoded from Director 8.9's own save and load code (see `docs
 ## Use it in your browser (nothing to install)
 
 - **Online:** https://mbsound.github.io/Riedel-Artist-and-Standalone-Offline-File-Viewer/
-- **Offline copy:** download [`web_extractor_v2.html`](https://raw.githubusercontent.com/mbsound/Riedel-Artist-and-Standalone-Offline-File-Viewer/main/web_extractor_v2.html)
-  (right-click → Save link as…) and open it in Chrome, Edge, Firefox or Safari.
+- **Offline copy:** right-click [`web_extractor_v2.html`](https://mbsound.github.io/Riedel-Artist-and-Standalone-Offline-File-Viewer/web_extractor_v2.html)
+  and choose **Save Link As…** (Safari: **Download Linked File**), then open the saved file in Chrome, Edge, Firefox
+  or Safari. Don't save the file from GitHub's file list: that link is GitHub's viewer page, not the extractor.
 
 Drop an `.Art` or `.bol` file on the page for quick views, then **Download Excel** or **Download JSON**. Your file is
 read inside the browser and is never uploaded. The page loads its Python runtime (Pyodide), openpyxl and styling from public
