@@ -117,7 +117,7 @@ def _artist_view(data):
         cmds = [ctx.byid[c] for c in k.get('commands') or [] if c in ctx.byid]
         if not cmds and not k.get('label'):
             continue                                  # empty key slot
-        n, bank = art_to_excel.key_number(k['slot'], counts.get(k['holder'], 0), ctx.byid[k['holder']]['class'])
+        n, bank = art_to_excel.key_number(k['slot'], counts.get(k['holder'], 0), ctx.byid.get(k['holder'], {{}}).get('class'))
         fns = ' | '.join('%s: %s' % (f, t) if t else f
                          for f, t, _ in (art_to_excel.describe_command(c, ctx) for c in cmds)) or '(no function)'
         tag = ('K%d' % n if isinstance(n, int) else n) + ('' if bank == 1 else ' bank %d' % bank)
