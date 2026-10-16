@@ -23,6 +23,8 @@ from openpyxl.utils import get_column_letter
 
 import artist_reader as A
 
+BOLERO_CLASS = 0x440                               # Bolero Wireless Beltpack (artist_reader.PORT_TYPE_NAMES)
+
 # ── styling ──────────────────────────────────────────────────────────────────────────────────────────
 HDR_FILL = PatternFill('solid', fgColor='1F3864')
 HDR_FONT = Font(bold=True, color='FFFFFF')
@@ -172,8 +174,8 @@ class Ctx:
 
     def key_place(self, k):
         n = self.key_counts_cache().get(k['holder'], 0)
-        key_no, bank = key_number(k['slot'], n)
-        return '%s, key %d%s' % (self.name(k['holder']), key_no, '' if bank == 1 else ' (bank %d)' % bank)
+        key_no, bank = key_number(k['slot'], n, self.byid.get(k['holder'], {}).get('class'))
+        return '%s, %s%s' % (self.name(k['holder']), key_text(key_no), '' if bank == 1 else ' (bank %d)' % bank)
 
     _kc = None
 
@@ -183,13 +185,42 @@ class Ctx:
         return self._kc
 
 
-def key_number(slot, slots_on_holder):
-    """Stored slot -> (key number, bank). Panels store two slots per key (key count = slots / 2, matching every
-    confirmed panel); the lower half holds bank 1. The bank split is inferred from usage, not from Director."""
+def key_number(slot, slots_on_holder, holder_class):
+    """Stored slot -> (key number, bank). holder_class is the holder's port class (PORT_TYPE_NAMES).
+
+    Bolero beltpacks (0x440): slots 0-5 are keys 1-6 and slot 6 is Reply (docs/FORMAT_NOTES.md; slot 0 = key 1
+    and slot 1 = key 2 confirmed with a test save). Slots 7-9 have no confirmed meaning, so they are
+    shown by slot only ('slot 8').
+
+    Panels store two slots per key (key count = slots / 2, matching every confirmed panel); the lower half holds
+    bank 1 (slot = key - 1, confirmed for slots 0-31). The upper half is bank 2: the bank split is inferred from
+    usage, not from Director, and the upper-half key numbers are inferred the same way."""
+    if holder_class == BOLERO_CLASS:
+        if slot < 6:
+            return slot + 1, 1
+        if slot == 6:
+            return 'Reply', 1
+        return 'slot %d' % slot, 1
     half = slots_on_holder // 2 if slots_on_holder >= 2 else slots_on_holder
     if half <= 0:
         return slot + 1, 1
     return slot % half + 1, 1 + slot // half
+
+
+def key_text(key_no):
+    """'key 3' for a numbered key, the name itself for 'Reply' or an unconfirmed 'slot 8'."""
+    return 'key %d' % key_no if isinstance(key_no, int) else key_no
+
+
+def key_title(key_no):
+    """Column-heading form of key_text: 'Key 3', 'Reply', 'Slot 8'."""
+    return 'Key %d' % key_no if isinstance(key_no, int) else key_no.capitalize()
+
+
+def key_sort(pos):
+    """Sort key for (bank, key number) pairs: numbered keys first in order, then named or slot-only positions."""
+    bank, key_no = pos
+    return (bank, isinstance(key_no, str), key_no if isinstance(key_no, int) else 0, str(key_no))
 
 
 def describe_command(cmd, ctx):
@@ -540,8 +571,8 @@ def sheet_ports(wb, ctx):
             panel_cols = list(settings.keys())
         rows.append((p, [ps[1] if len(ps) > 1 else '', p.get('name'), p.get('port_str'), p.get('alias'),
                          p.get('port_str2'), ptype, node_bay, p.get('trunk_address'),
-                         '%+.1f dB' % p['input_gain_db'] if 'input_gain_db' in p else '',
-                         '%+.1f dB' % p['output_gain_db'] if 'output_gain_db' in p else '',
+                         '%+.1f dB' % p['input_gain_db'] if p.get('input_gain_db') is not None else '',
+                         '%+.1f dB' % p['output_gain_db'] if p.get('output_gain_db') is not None else '',
                          A.room_code_label(p.get('room_code')), p.get('room_mode'), p.get('second_audio_channel'),
                          p.get('keypad_shortcut'), p.get('media_interface'), ctx.name(p.get('phone_book')),
                          ', '.join(ctx.name(s) for s in p.get('scroll_lists') or [] if s not in NO_REF),
@@ -566,13 +597,13 @@ def sheet_keys(wb, ctx):
         cmds = [ctx.byid[c] for c in k.get('commands') or [] if c in ctx.byid]
         if not cmds and not k.get('label'):
             continue                                     # empty key slot
-        key_no, bank = key_number(k['slot'], counts.get(k['holder'], 0))
+        key_no, bank = key_number(k['slot'], counts.get(k['holder'], 0), ctx.byid.get(k['holder'], {}).get('class'))
         fns = ' | '.join('%s: %s' % (f, t) if t else f for f, t, _ in (describe_command(c, ctx) for c in cmds))
         per_holder[k['holder']][(bank, key_no)] = (k.get('label'), k.get('mode'), fns or '(no function)')
-    positions = sorted({pos for keys in per_holder.values() for pos in keys})
+    positions = sorted({pos for keys in per_holder.values() for pos in keys}, key=key_sort)
     headers = ['Port', 'Label', 'Long name', 'Type', 'Keys used']
     for bank, n in positions:
-        tag = 'Key %d' % n + ('' if bank == 1 else ' bank %d' % bank)
+        tag = key_title(n) + ('' if bank == 1 else ' bank %d' % bank)
         headers += ['%s Label' % tag, '%s Mode' % tag, '%s Function' % tag]
     rows = []
     for hid, keys in per_holder.items():
@@ -604,7 +635,8 @@ def sheet_keys(wb, ctx):
     rows = [r for _, r in sorted(rows, key=lambda x: x[0])]
     ws = write_table(wb, 'Keys', headers, rows,
                      note='One row per panel, beltpack and expansion panel; Label / Mode / Function for each key. '
-                          'Bank 2 = the upper half of the stored key slots (inferred from usage). '
+                          'Bolero: slots 0-5 are keys 1-6, slot 6 is Reply. '
+                          'Bank 2 = the upper half of a panel\'s stored key slots (inferred from usage). '
                           'Per-key colours, timeouts and other options are on the Key Details sheet.')
     ws.freeze_panes = 'F4'                               # keep the panel columns in view while scrolling right
 
@@ -613,7 +645,7 @@ def sheet_key_details(wb, ctx):
     counts = ctx.key_counts_cache()
     rows, funcs = [], []
     for k in sorted(ctx.keys, key=lambda k: (ctx.name(k['holder']), k['slot'])):
-        key_no, bank = key_number(k['slot'], counts.get(k['holder'], 0))
+        key_no, bank = key_number(k['slot'], counts.get(k['holder'], 0), ctx.byid.get(k['holder'], {}).get('class'))
         cmds = [ctx.byid[c] for c in k.get('commands') or [] if c in ctx.byid]
         desc = [describe_command(c, ctx) for c in cmds]
         if not cmds and not k.get('label'):
@@ -633,7 +665,8 @@ def sheet_key_details(wb, ctx):
                              'Restart latching timer', 'Functions', 'Function details', 'Changed last session'],
                 rows, changed_col=20,
                 note='One row per key that has a label or a function. Key = stored slot within half of the holder\'s '
-                     'slots; Bank 2 = the upper half (inferred from usage). "Stored slot" is the raw position.')
+                     'slots; Bank 2 = the upper half (inferred from usage). Bolero: slots 0-5 are keys 1-6, slot 6 is '
+                     'Reply. "Stored slot" is the raw position.')
 
 
 def sheet_functions(wb, ctx):
@@ -805,7 +838,7 @@ def resource_counts(ctx):
         except Exception:
             model = 'class 0x%x' % c['class']
         cnt[('Controllers', model + ' (Artist 1024 controller)') if c['class'] == 0x10c else ('Cards', model)] += 1
-    key_classes = {ctx.byid[k['holder']]['class'] for k in ctx.keys if k['holder'] in ctx.byid}
+    key_classes = {ctx.byid.get(k['holder'], {}).get('class') for k in ctx.keys if k['holder'] in ctx.byid}
     for p in ctx.ports:
         try:
             typ = A.port_type(p, ctx.byid)

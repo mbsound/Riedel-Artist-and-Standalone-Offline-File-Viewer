@@ -312,3 +312,10 @@ The user asked for the Excel side to be fixed without trusting Gemini's work.
 - **Removed:** `art_extractor.py`, `bol_extractor.py`, `riedel_formats.py`, `bol_gui.py`, the macOS app zip and `.spec`, `web_extractor.html`, `tools/harness.js`, the `fix_*.py` one-off scripts, the generated `.xlsx`/`.json` inside `Code/`, `Code/scratch/`, `tools/node_modules`. `tools/census.py` now uses `artist_reader.read_art`. README and FORMAT_NOTES were updated.
 - **Not committed:** git cannot write `.git/COMMIT_EDITMSG` (access denied) in this copy, so all of the above is uncommitted working-tree changes.
 - **Key bank:** on the Keys sheet, Bank 2 means the upper half of a holder's stored slots. This is inferred from usage and still needs a test save to confirm.
+
+## 12. 2026-10-11: three decoder accuracy fixes
+
+Each fix has a unit test in `tests/test_decoder_fixes.py` (`python -I -m unittest discover -s tests -t .`).
+- **Bolero keys (`art_to_excel.key_number`).** Slots 0-5 are keys 1-6 and slot 6 is Reply, on every Bolero beltpack. The old half-split labelled Reply as "key 2 (bank 2)". Slots 7-9 are shown as "slot N" because their meaning is unconfirmed. Panels are unchanged. `key_number` now takes the holder's port class.
+- **Dante allocated ports (`artist_reader.read_card_sic_dante`).** The trailing byte is kept only as `dante_u8`. It no longer overwrites `allocated_ports` (AllocatedPorts, +0x90). The byte's meaning is still unknown.
+- **Gains by direction (`artist_reader.port_gains`).** Input-only, output-only, both and neither classes follow Director's Ports grid. A class with no direction reports `None` (blank in Excel). Classes the export does not cover, such as 0x438/0x439 and the other panels, keep both gains until confirmed.

@@ -527,7 +527,9 @@ def read_card_sic_dante(ar, o):
     read_sic_base(ar, o)
     o['dante_name'] = ar.string()
     if ar.version >= 0x4d0:
-        o['allocated_ports'] = o['dante_u8'] = ar.u8()
+        # One byte after the name; its meaning is unknown, so it is kept as dante_u8 only. It must not replace
+        # allocated_ports, which read_sic_base already set from +0x90 (AllocatedPorts).
+        o['dante_u8'] = ar.u8()
 
 
 # ----- key commands (CPhysCommand subclasses) -------------------------------------------------
@@ -1325,7 +1327,7 @@ def read_port(ar, o, pool_state=0):
     b5 = ar._take(5)
     o['vox_hold'], o['vox_on'], o['vox_off'] = b5[0], b5[1], b5[2]
     # Confirmed 2026-09-25: gain byte g -> (g - 36) / 2 dB (0 = -18 dB, 36 = 0 dB, 72 = +18 dB).
-    o['input_gain_db'], o['output_gain_db'] = (b5[3] - 36) / 2, (b5[4] - 36) / 2
+    o['input_gain_db'], o['output_gain_db'] = port_gains(cls, (b5[3] - 36) / 2, (b5[4] - 36) / 2)
     if v < 0x2e:
         ar.skip(2)
     if v >= 0x27:
@@ -1433,6 +1435,20 @@ PORT_TYPE_NAMES = {
     0x515: 'NSA Connection', 0x517: 'DSP-1216HL'}
 # Audio ports (2-wire, 4-wire, network in/out) get the card's interface in brackets, e.g. '4-Wire (AIO)'.
 AUDIO_PORT_CLASSES = {0x401, 0x402, 0x403, 0x438, 0x439, 0x441, 0x442}
+# Gain directions Director's Ports grid fills per port class: (Input Gain, Output Gain). Confirmed against a Director
+# Ports export: 2-Wire Input and Input (Dante) are input only, 2-Wire Output and Output (Dante) are output only,
+# 4-Wire and Bolero Wireless Beltpack have both, RSP-1232HL has neither. Classes not listed here (for example
+# 0x438 / 0x439 and the other panels) are unconfirmed and keep both gains, which is the previous behaviour.
+GAIN_DIRECTIONS = {0x401: (True, False), 0x441: (True, False), 0x402: (False, True), 0x442: (False, True),
+                   0x403: (True, True), 0x440: (True, True), 0x505: (False, False)}
+
+
+def port_gains(cls, input_db, output_db):
+    """(input gain, output gain) in dB as Director shows them: None where the port class has no such direction."""
+    has_in, has_out = GAIN_DIRECTIONS.get(cls, (True, True))
+    return (input_db if has_in else None), (output_db if has_out else None)
+
+
 CARD_INTERFACE = {0x101: 'AES', 0x103: 'AIO', 0x109: 'AES67', 0x10b: 'AES67', 0x10a: 'Dante', 0x10f: 'Dante'}
 
 

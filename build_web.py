@@ -117,10 +117,10 @@ def _artist_view(data):
         cmds = [ctx.byid[c] for c in k.get('commands') or [] if c in ctx.byid]
         if not cmds and not k.get('label'):
             continue                                  # empty key slot
-        n, bank = art_to_excel.key_number(k['slot'], counts.get(k['holder'], 0))
+        n, bank = art_to_excel.key_number(k['slot'], counts.get(k['holder'], 0), ctx.byid[k['holder']]['class'])
         fns = ' | '.join('%s: %s' % (f, t) if t else f
                          for f, t, _ in (art_to_excel.describe_command(c, ctx) for c in cmds)) or '(no function)'
-        tag = 'K%d' % n + ('' if bank == 1 else ' bank %d' % bank)
+        tag = ('K%d' % n if isinstance(n, int) else n) + ('' if bank == 1 else ' bank %d' % bank)
         label = (' "%s"' % k['label']) if k.get('label') else ''
         by_holder.setdefault(k['holder'], []).append((k['slot'], '%s%s [%s]: %s' % (tag, label, k.get('mode') or '', fns)))
     expansions = {{}}                                  # host panel id -> its expansion panels

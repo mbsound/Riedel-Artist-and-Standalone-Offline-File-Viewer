@@ -39,8 +39,8 @@ def decoded(port, byid):
         'Node-Bay': A.port_node_bay(port, byid),
         'Port Type': A.port_type(port, byid),
         'Trunking object address': str(port['trunk_address']),
-        'Input Gain': '%+.1f' % port['input_gain_db'],
-        'Output Gain': '%+.1f' % port['output_gain_db'],
+        'Input Gain': None if port['input_gain_db'] is None else '%+.1f' % port['input_gain_db'],
+        'Output Gain': None if port['output_gain_db'] is None else '%+.1f' % port['output_gain_db'],
         'Room Code': ('Room ' if port['room_code'] else '') + A.room_code_label(port['room_code']),
     }
     for col in IP_COLS:
